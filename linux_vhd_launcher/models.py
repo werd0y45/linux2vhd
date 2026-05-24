@@ -221,6 +221,48 @@ class LiveVhdBuildPlan:
 
 
 @dataclass(slots=True)
+class StagedEfiFile:
+    """Single EFI file planned for staging to ESP."""
+
+    source: str
+    destination: str
+    sha256: str | None
+    required: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "source": self.source,
+            "destination": self.destination,
+            "sha256": self.sha256,
+            "required": self.required,
+        }
+
+
+@dataclass(slots=True)
+class EspStagingPlan:
+    """Plan for staging EFI files onto Windows ESP."""
+
+    esp_mount_letter: str | None
+    staged_dir: str
+    files: list[StagedEfiFile]
+    requires_esp_write: bool
+    secure_boot_warning: str | None
+    rollback_steps: list[str]
+    blockers: list[str]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "esp_mount_letter": self.esp_mount_letter,
+            "staged_dir": self.staged_dir,
+            "files": [item.to_dict() for item in self.files],
+            "requires_esp_write": self.requires_esp_write,
+            "secure_boot_warning": self.secure_boot_warning,
+            "rollback_steps": self.rollback_steps,
+            "blockers": self.blockers,
+        }
+
+
+@dataclass(slots=True)
 class DoctorReport:
     """Structured diagnostics used in validation reports."""
 

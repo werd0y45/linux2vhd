@@ -47,6 +47,9 @@ class DemoContext:
     confirmation_token: bool
     confirm_vm_snapshot: bool
     allow_known_failed_strategy: bool = False
+    allow_esp_write: bool = False
+    allow_firmware_entry: bool = False
+    allow_secure_boot_experiment: bool = False
 
 
 @dataclass(slots=True)
@@ -197,6 +200,9 @@ def register_live(
             confirmation_token=context.confirmation_token,
             confirm_vm_snapshot=context.confirm_vm_snapshot,
             allow_known_failed_strategy=context.allow_known_failed_strategy,
+            allow_esp_write=context.allow_esp_write,
+            allow_firmware_entry=context.allow_firmware_entry,
+            allow_secure_boot_experiment=context.allow_secure_boot_experiment,
         )
     )
 
@@ -289,6 +295,71 @@ def unregister_live_bcd(
         notes=["experimental BCD entry removed"],
     )
     return DemoExecutionResult(status="registration_experimental_done")
+
+
+def stage_esp_plan(
+    *,
+    context: DemoContext,
+    vhd_path: Path,
+) -> DemoExecutionResult:
+    """Generate dry-run ESP staging plan via firmware-efi-staged strategy."""
+    plan_context = DemoContext(
+        lab_dir=context.lab_dir,
+        report_dir=context.report_dir,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+        allow_known_failed_strategy=False,
+        allow_esp_write=False,
+        allow_firmware_entry=False,
+        allow_secure_boot_experiment=False,
+    )
+    return register_live(
+        context=plan_context,
+        vhd_path=vhd_path,
+        strategy="firmware-efi-staged",
+    )
+
+
+def stage_esp_apply(
+    *,
+    context: DemoContext,
+    vhd_path: Path,
+) -> DemoExecutionResult:
+    """Attempt ESP staging strategy (currently blocked in real mode)."""
+    return register_live(
+        context=context,
+        vhd_path=vhd_path,
+        strategy="firmware-efi-staged",
+    )
+
+
+def stage_esp_cleanup(
+    *,
+    context: DemoContext,
+) -> DemoExecutionResult:
+    """Emit cleanup plan for staged ESP files and optional firmware entry."""
+    commands = [
+        "bcdedit /delete {GUID} /f  # if created",
+        "mountvol S: /s",
+        "Remove-Item -Recurse -Force S:\\EFI\\LinuxVHDLauncher\\ubuntu-live",
+        "mountvol S: /d",
+    ]
+    payload = {
+        "status": "planned",
+        "commands": commands,
+        "notes": [
+            "Cleanup plan only. Execute manually in disposable VM.",
+            "If BCD/firmware entry was never created, skip delete command.",
+        ],
+    }
+    context.report_dir.mkdir(parents=True, exist_ok=True)
+    (context.report_dir / "esp_cleanup_plan.json").write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return DemoExecutionResult(status="planned", warnings=list(payload["notes"]))
 
 
 def install_live(

@@ -9,6 +9,7 @@ Boot registration is separated from payload build.
 - `firmware`: placeholder strategy, returns blocker.
 - `bootmgr`: experimental BCDEdit mutation path.
 - `bootmgr-experimental-vhd`: explicit unsafe-gated BCD VHD experiment for disposable VM snapshot.
+- `firmware-efi-staged`: ESP staging-oriented strategy; currently plan-first and real mode blocked pending documented firmware-entry validation.
 
 ## Known Failure Evidence (Windows 10 VM)
 
@@ -61,6 +62,18 @@ As a result, strategy is marked known-failed with id:
 - `bcdedit /displayorder <guid> /addlast`
 - rollback: `bcdedit /delete <guid> /f`
 
+## Firmware-efi-staged planning scope
+
+- Inspects payload metadata and prepares `EspStagingPlan`.
+- Plans ESP mount via `mountvol S: /s`.
+- Plans staging under `\\EFI\\LinuxVHDLauncher\\ubuntu-live\\`.
+- Plans rollback:
+  - delete entry (`bcdedit /delete {GUID} /f`) if created,
+  - remove staged ESP directory,
+  - unmount ESP (`mountvol S: /d`).
+- Does not mutate `{bootmgr}` path or default entry.
+- Does not claim bootability.
+
 ## Artifacts
 
 - `bcd_backup_live_registration.bcd`
@@ -75,6 +88,7 @@ As a result, strategy is marked known-failed with id:
 
 - Microsoft documents Native Boot VHD/VHDX for Windows boot entries.
 - Linux live boot through this chain is unsupported/experimental in this project.
+- Documented generic firmware EFI entry creation flow for this Linux path is not confirmed here.
 - Successful command execution does not imply Linux boot success.
 - Manual reboot verification in VM is mandatory.
 - VM snapshot is mandatory before real mutation.

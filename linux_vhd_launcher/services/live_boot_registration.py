@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from linux_vhd_launcher.errors import UnsafeRealOperationError, UnsupportedPlatformError
-from linux_vhd_launcher.models import LiveVhdLayout
+from linux_vhd_launcher.models import EspStagingPlan, LiveVhdLayout, StagedEfiFile
 from linux_vhd_launcher.system.runner import CommandResult, CommandRunner
 from linux_vhd_launcher.system.windows_privileges import is_admin, is_windows_platform
 from linux_vhd_launcher.system.windows_safety import RealWindowsOpsGate
@@ -30,6 +30,9 @@ class LiveRegistrationRequest:
     confirmation_token: bool
     confirm_vm_snapshot: bool
     allow_known_failed_strategy: bool = False
+    allow_esp_write: bool = False
+    allow_firmware_entry: bool = False
+    allow_secure_boot_experiment: bool = False
 
 
 @dataclass(slots=True)
@@ -49,6 +52,7 @@ class LiveRegistrationOutcome:
     created_guid: str | None = None
     backup_path: Path | None = None
     known_failed_strategy: str | None = None
+    esp_staging_plan: EspStagingPlan | None = None
     planned_commands: list[list[str]] = field(default_factory=list)
     executed_commands: list[CommandResult] = field(default_factory=list)
     unregister_command: list[str] | None = None
@@ -63,6 +67,9 @@ class LiveRegistrationOutcome:
             "created_guid": self.created_guid,
             "backup_path": str(self.backup_path) if self.backup_path else None,
             "known_failed_strategy": self.known_failed_strategy,
+            "esp_staging_plan": (
+                self.esp_staging_plan.to_dict() if self.esp_staging_plan is not None else None
+            ),
             "planned_commands": [list(item) for item in self.planned_commands],
             "executed_commands": [
                 {
@@ -132,21 +139,88 @@ class FirmwareEfiStagedDryRunStrategy:
     name: str = "firmware-efi-staged"
 
     def register(self, request: LiveRegistrationRequest) -> LiveRegistrationOutcome:
-        planned = [
-            ["bcdedit", "/enum", "firmware"],
-            ["powershell", "-NoProfile", "Get-Volume -FileSystemLabel ESP"],
-            ["copy", "<lab-efi-stage>\\BOOTX64.EFI", "<esp-lab-folder>\\BOOTX64.EFI"],
-            ["copy", "<lab-efi-stage>\\grub.cfg", "<esp-lab-folder>\\grub.cfg"],
+        staged_dir = "\\EFI\\LinuxVHDLauncher\\ubuntu-live\\"
+        staged_files = [
+            StagedEfiFile(
+                source=f"{request.layout.vhd_path}::/EFI/BOOT/BOOTX64.EFI",
+                destination=f"{staged_dir}BOOTX64.EFI",
+                sha256=None,
+                required=True,
+            ),
+            StagedEfiFile(
+                source=f"{request.layout.vhd_path}::/EFI/BOOT/grubx64.efi",
+                destination=f"{staged_dir}grubx64.efi",
+                sha256=None,
+                required=True,
+            ),
+            StagedEfiFile(
+                source=f"{request.layout.vhd_path}::/EFI/BOOT/grub.cfg",
+                destination=f"{staged_dir}grub.cfg",
+                sha256=None,
+                required=True,
+            ),
         ]
+        blockers = [
+            "Documented BCDEdit flow for creating generic firmware EFI app entry is not confirmed in this project.",
+            "BCD/firmware reference to EFI binary inside VHDX file is not confirmed.",
+        ]
+        rollback_steps = [
+            "bcdedit /delete {GUID} /f (if firmware/Bcd entry created)",
+            f"Remove-Item -Recurse -Force <ESP>\\{staged_dir.strip('\\')}",
+            "mountvol <ESP_LETTER>: /d",
+        ]
+        esp_plan = EspStagingPlan(
+            esp_mount_letter="S",
+            staged_dir=staged_dir,
+            files=staged_files,
+            requires_esp_write=True,
+            secure_boot_warning=(
+                "Secure Boot path is unverified. Do not claim success without reboot evidence; "
+                "shim/signature compatibility remains unknown."
+            ),
+            rollback_steps=rollback_steps,
+            blockers=blockers,
+        )
+        planned = [
+            ["powershell", "-NoProfile", "Mount-DiskImage -ImagePath <vhd-path> -PassThru"],
+            ["bcdedit", "/enum", "firmware"],
+            ["mountvol", "S:", "/s"],
+            ["powershell", "-NoProfile", "Get-Volume -FileSystemLabel ESP"],
+            ["copy", "<vhd-efi>\\BOOTX64.EFI", f"S:{staged_dir}BOOTX64.EFI"],
+            ["copy", "<vhd-efi>\\grubx64.efi", f"S:{staged_dir}grubx64.efi"],
+            ["copy", "<vhd-efi>\\grub.cfg", f"S:{staged_dir}grub.cfg"],
+            ["bcdedit", "/create", "/d", "LinuxVHDLauncher Firmware EFI EXPERIMENT", "/application", "bootapp"],
+            ["bcdedit", "/set", "{GUID}", "path", f"{staged_dir}BOOTX64.EFI"],
+            ["bcdedit", "/displayorder", "{GUID}", "/addlast"],
+            ["mountvol", "S:", "/d"],
+        ]
+        if not request.dry_run and (
+            not request.allow_esp_write
+            or not request.allow_firmware_entry
+            or not request.allow_secure_boot_experiment
+        ):
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "firmware-efi-staged real mode requires --allow-esp-write, "
+                    "--allow-firmware-entry, and --allow-secure-boot-experiment."
+                ],
+                warnings=["No ESP mutation executed."],
+                planned_commands=planned,
+                esp_staging_plan=esp_plan,
+            )
         if not request.dry_run:
             return LiveRegistrationOutcome(
                 strategy=self.name,
                 status="registration_blocked",
                 blockers=[
-                    "firmware-efi-staged real mode is not implemented. Dry-run only in this release."
+                    "firmware-efi-staged real mode remains blocked in this release until "
+                    "documented firmware-entry creation path is validated."
                 ],
                 warnings=["No ESP mutation executed."],
                 planned_commands=planned,
+                esp_staging_plan=esp_plan,
             )
         return LiveRegistrationOutcome(
             strategy=self.name,
@@ -156,6 +230,8 @@ class FirmwareEfiStagedDryRunStrategy:
                 "Real ESP mutation requires separate explicit gated command.",
             ],
             planned_commands=planned,
+            esp_staging_plan=esp_plan,
+            blockers=blockers,
         )
 
 

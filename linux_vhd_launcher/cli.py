@@ -22,12 +22,13 @@ from linux_vhd_launcher.demo.live_vhd_demo import (
     mark_boot_result,
     plan_live,
     register_live,
+    stage_esp_apply,
+    stage_esp_cleanup,
+    stage_esp_plan,
     uninstall_live,
     unregister_live_bcd,
 )
-from linux_vhd_launcher.demo.live_vhd_demo import (
-    inspect_iso as demo_inspect_iso,
-)
+from linux_vhd_launcher.demo.live_vhd_demo import inspect_iso as demo_inspect_iso
 from linux_vhd_launcher.errors import (
     LinuxVhdLauncherError,
     RegistryFormatError,
@@ -365,6 +366,9 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_register.add_argument("--i-understand-this-is-experimental", action="store_true")
     demo_live_register.add_argument("--confirm-vm-snapshot", action="store_true")
     demo_live_register.add_argument("--allow-known-failed-strategy", action="store_true")
+    demo_live_register.add_argument("--allow-esp-write", action="store_true")
+    demo_live_register.add_argument("--allow-firmware-entry", action="store_true")
+    demo_live_register.add_argument("--allow-secure-boot-experiment", action="store_true")
     demo_live_register.add_argument("--no-dry-run", action="store_true")
     demo_live_register.add_argument("--json", action="store_true")
 
@@ -392,6 +396,9 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_install.add_argument("--i-understand-this-is-experimental", action="store_true")
     demo_live_install.add_argument("--confirm-vm-snapshot", action="store_true")
     demo_live_install.add_argument("--allow-known-failed-strategy", action="store_true")
+    demo_live_install.add_argument("--allow-esp-write", action="store_true")
+    demo_live_install.add_argument("--allow-firmware-entry", action="store_true")
+    demo_live_install.add_argument("--allow-secure-boot-experiment", action="store_true")
     demo_live_install.add_argument("--no-dry-run", action="store_true")
     demo_live_install.add_argument("--json", action="store_true")
 
@@ -419,6 +426,36 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_unregister.add_argument("--confirm-vm-snapshot", action="store_true")
     demo_live_unregister.add_argument("--no-dry-run", action="store_true")
     demo_live_unregister.add_argument("--json", action="store_true")
+
+    demo_live_stage_esp_plan = demo_live_sub.add_parser(
+        "stage-esp-plan", help="Build dry-run ESP staging plan"
+    )
+    demo_live_stage_esp_plan.add_argument("--vhd", type=Path, required=True)
+    demo_live_stage_esp_plan.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_stage_esp_plan.add_argument("--report-dir", type=Path, required=True)
+    demo_live_stage_esp_plan.add_argument("--json", action="store_true")
+
+    demo_live_stage_esp_apply = demo_live_sub.add_parser(
+        "stage-esp-apply", help="Attempt ESP staging strategy (real mode blocked by default)"
+    )
+    demo_live_stage_esp_apply.add_argument("--vhd", type=Path, required=True)
+    demo_live_stage_esp_apply.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_stage_esp_apply.add_argument("--report-dir", type=Path, required=True)
+    demo_live_stage_esp_apply.add_argument("--execute-real-windows-ops", action="store_true")
+    demo_live_stage_esp_apply.add_argument("--i-understand-this-is-experimental", action="store_true")
+    demo_live_stage_esp_apply.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_stage_esp_apply.add_argument("--allow-esp-write", action="store_true")
+    demo_live_stage_esp_apply.add_argument("--allow-firmware-entry", action="store_true")
+    demo_live_stage_esp_apply.add_argument("--allow-secure-boot-experiment", action="store_true")
+    demo_live_stage_esp_apply.add_argument("--no-dry-run", action="store_true")
+    demo_live_stage_esp_apply.add_argument("--json", action="store_true")
+
+    demo_live_stage_esp_cleanup = demo_live_sub.add_parser(
+        "stage-esp-cleanup", help="Emit ESP cleanup plan"
+    )
+    demo_live_stage_esp_cleanup.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_stage_esp_cleanup.add_argument("--report-dir", type=Path, required=True)
+    demo_live_stage_esp_cleanup.add_argument("--json", action="store_true")
 
     demo_live_mark_boot = demo_live_sub.add_parser(
         "mark-boot-result", help="Record manual reboot test result"
@@ -1402,6 +1439,9 @@ def _demo_context_from_args(args: argparse.Namespace) -> DemoContext:
         confirmation_token=bool(getattr(args, "i_understand_this_is_experimental", False)),
         confirm_vm_snapshot=bool(getattr(args, "confirm_vm_snapshot", False)),
         allow_known_failed_strategy=bool(getattr(args, "allow_known_failed_strategy", False)),
+        allow_esp_write=bool(getattr(args, "allow_esp_write", False)),
+        allow_firmware_entry=bool(getattr(args, "allow_firmware_entry", False)),
+        allow_secure_boot_experiment=bool(getattr(args, "allow_secure_boot_experiment", False)),
     )
 
 
@@ -1473,6 +1513,29 @@ def _run_demo_command(args: argparse.Namespace) -> int:
             report_dir=Path(args.report_dir),
             result=args.result,
             notes=str(args.notes),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 0
+
+    if args.demo_live_command == "stage-esp-plan":
+        result = stage_esp_plan(
+            context=_demo_context_from_args(args),
+            vhd_path=Path(args.vhd),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 0
+
+    if args.demo_live_command == "stage-esp-apply":
+        result = stage_esp_apply(
+            context=_demo_context_from_args(args),
+            vhd_path=Path(args.vhd),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 2 if result.status == "registration_blocked" else 0
+
+    if args.demo_live_command == "stage-esp-cleanup":
+        result = stage_esp_cleanup(
+            context=_demo_context_from_args(args),
         )
         _print_demo_result(result, as_json=as_json)
         return 0

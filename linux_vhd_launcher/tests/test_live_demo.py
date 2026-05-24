@@ -707,6 +707,12 @@ def test_firmware_efi_staged_strategy_dry_run_only(tmp_path: Path) -> None:
     out = strategy.register(req)
     assert out.status == "planned"
     assert out.planned_commands
+    assert all("/copy" not in " ".join(command) for command in out.planned_commands)
+    assert all("{bootmgr}" not in " ".join(command) for command in out.planned_commands)
+    assert all("/default" not in " ".join(command) for command in out.planned_commands)
+    assert out.esp_staging_plan is not None
+    assert out.esp_staging_plan.rollback_steps
+    assert out.esp_staging_plan.requires_esp_write is True
 
     req_real = LiveRegistrationRequest(
         layout=req.layout,
@@ -719,9 +725,80 @@ def test_firmware_efi_staged_strategy_dry_run_only(tmp_path: Path) -> None:
     )
     out_real = strategy.register(req_real)
     assert out_real.status == "registration_blocked"
+    assert "allow-esp-write" in (out_real.blockers[0] if out_real.blockers else "")
+
+    req_real_flags = LiveRegistrationRequest(
+        layout=req.layout,
+        report_dir=req.report_dir,
+        lab_dir=req.lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=True,
+        confirmation_token=True,
+        confirm_vm_snapshot=True,
+        allow_esp_write=True,
+        allow_firmware_entry=True,
+        allow_secure_boot_experiment=True,
+    )
+    out_real_flags = strategy.register(req_real_flags)
+    assert out_real_flags.status == "registration_blocked"
+    assert any("real mode remains blocked" in blocker for blocker in out_real_flags.blockers)
 
 
 def test_docs_bcd_registration_mentions_known_failed_analysis() -> None:
     content = Path("docs/BCD_LIVE_REGISTRATION.md").read_text(encoding="utf-8")
     assert "known-failed" in content.lower() or "known failed" in content.lower()
     assert "copied" in content.lower()
+
+
+def test_cli_stage_esp_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LINUX_VHD_LAUNCHER_HOME", str(tmp_path / ".cfg"))
+    lab_dir = tmp_path / "lab"
+    report_dir = tmp_path / "reports"
+    lab_dir.mkdir()
+    report_dir.mkdir()
+    vhd_path = lab_dir / "ubuntu-live.vhdx"
+
+    plan_code = cli.main(
+        [
+            "demo",
+            "live",
+            "stage-esp-plan",
+            "--vhd",
+            str(vhd_path),
+            "--lab-dir",
+            str(lab_dir),
+            "--report-dir",
+            str(report_dir),
+            "--json",
+        ]
+    )
+    apply_code = cli.main(
+        [
+            "demo",
+            "live",
+            "stage-esp-apply",
+            "--vhd",
+            str(vhd_path),
+            "--lab-dir",
+            str(lab_dir),
+            "--report-dir",
+            str(report_dir),
+            "--no-dry-run",
+            "--json",
+        ]
+    )
+    cleanup_code = cli.main(
+        [
+            "demo",
+            "live",
+            "stage-esp-cleanup",
+            "--lab-dir",
+            str(lab_dir),
+            "--report-dir",
+            str(report_dir),
+            "--json",
+        ]
+    )
+    assert plan_code == 0
+    assert apply_code == 2
+    assert cleanup_code == 0
