@@ -29,6 +29,7 @@ class LiveRegistrationRequest:
     execute_real_windows_ops: bool
     confirmation_token: bool
     confirm_vm_snapshot: bool
+    allow_known_failed_strategy: bool = False
 
 
 @dataclass(slots=True)
@@ -36,11 +37,18 @@ class LiveRegistrationOutcome:
     """Result of registration strategy execution."""
 
     strategy: str
-    status: Literal["planned", "registration_blocked", "registration_experimental_done", "registration_failed"]
+    status: Literal[
+        "planned",
+        "registration_blocked",
+        "registration_experimental_done",
+        "registration_experimental_done_but_boot_failed",
+        "registration_failed",
+    ]
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     created_guid: str | None = None
     backup_path: Path | None = None
+    known_failed_strategy: str | None = None
     planned_commands: list[list[str]] = field(default_factory=list)
     executed_commands: list[CommandResult] = field(default_factory=list)
     unregister_command: list[str] | None = None
@@ -54,6 +62,7 @@ class LiveRegistrationOutcome:
             "warnings": self.warnings,
             "created_guid": self.created_guid,
             "backup_path": str(self.backup_path) if self.backup_path else None,
+            "known_failed_strategy": self.known_failed_strategy,
             "planned_commands": [list(item) for item in self.planned_commands],
             "executed_commands": [
                 {
@@ -117,12 +126,47 @@ class FirmwareStoreStrategy:
 
 
 @dataclass(slots=True)
+class FirmwareEfiStagedDryRunStrategy:
+    """Dry-run-only placeholder for firmware/ESP-staged experiments."""
+
+    name: str = "firmware-efi-staged"
+
+    def register(self, request: LiveRegistrationRequest) -> LiveRegistrationOutcome:
+        planned = [
+            ["bcdedit", "/enum", "firmware"],
+            ["powershell", "-NoProfile", "Get-Volume -FileSystemLabel ESP"],
+            ["copy", "<lab-efi-stage>\\BOOTX64.EFI", "<esp-lab-folder>\\BOOTX64.EFI"],
+            ["copy", "<lab-efi-stage>\\grub.cfg", "<esp-lab-folder>\\grub.cfg"],
+        ]
+        if not request.dry_run:
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "firmware-efi-staged real mode is not implemented. Dry-run only in this release."
+                ],
+                warnings=["No ESP mutation executed."],
+                planned_commands=planned,
+            )
+        return LiveRegistrationOutcome(
+            strategy=self.name,
+            status="planned",
+            warnings=[
+                "Dry-run only: firmware/ESP staging plan generated.",
+                "Real ESP mutation requires separate explicit gated command.",
+            ],
+            planned_commands=planned,
+        )
+
+
+@dataclass(slots=True)
 class BcdBootMgrStrategy:
     """Experimental BCDEdit-based registration strategy."""
 
     name: str = "bootmgr"
     allow_unconfirmed_direct_chain: bool = False
     runner_factory: Callable[[], CommandRunner] = CommandRunner
+    known_failed_strategy_id: str | None = None
 
     def register(self, request: LiveRegistrationRequest) -> LiveRegistrationOutcome:
         report_dir = request.report_dir
@@ -146,6 +190,18 @@ class BcdBootMgrStrategy:
                     "Planned experimental commands were generated but not executed.",
                     "Do not claim bootability without manual reboot validation.",
                 ],
+            )
+
+        if self.known_failed_strategy_id and not request.allow_known_failed_strategy:
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "This strategy is known-failed from reboot evidence. "
+                    "Use --allow-known-failed-strategy to run it again in disposable VM only."
+                ],
+                warnings=["No BCD mutation executed."],
+                known_failed_strategy=self.known_failed_strategy_id,
             )
 
         vhd_device = _format_vhd_device(request.layout.vhd_path)
@@ -189,10 +245,20 @@ class BcdBootMgrStrategy:
         )
 
         runner = self.runner_factory()
+        success_status: Literal[
+            "registration_experimental_done",
+            "registration_experimental_done_but_boot_failed",
+        ] = (
+            "registration_experimental_done_but_boot_failed"
+            if self.known_failed_strategy_id
+            else "registration_experimental_done"
+        )
+
         outcome = LiveRegistrationOutcome(
             strategy=self.name,
-            status="registration_experimental_done",
+            status=success_status,
             backup_path=backup_path,
+            known_failed_strategy=self.known_failed_strategy_id,
             planned_commands=planned_commands,
             warnings=[
                 "Experimental registration done. Bootability remains unverified until manual reboot test.",
@@ -275,7 +341,13 @@ def choose_registration_strategy(
     if value == "bootmgr":
         return BcdBootMgrStrategy(allow_unconfirmed_direct_chain=allow_unconfirmed_direct_chain)
     if value == "bootmgr-experimental-vhd":
-        return BcdBootMgrStrategy(name="bootmgr-experimental-vhd", allow_unconfirmed_direct_chain=True)
+        return BcdBootMgrStrategy(
+            name="bootmgr-experimental-vhd",
+            allow_unconfirmed_direct_chain=True,
+            known_failed_strategy_id="copied-current-osloader-vhd",
+        )
+    if value == "firmware-efi-staged":
+        return FirmwareEfiStagedDryRunStrategy()
     if value == "auto":
         return BlockedUnsupportedStrategy(
             reason=(

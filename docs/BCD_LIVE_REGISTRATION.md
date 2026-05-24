@@ -10,6 +10,25 @@ Boot registration is separated from payload build.
 - `bootmgr`: experimental BCDEdit mutation path.
 - `bootmgr-experimental-vhd`: explicit unsafe-gated BCD VHD experiment for disposable VM snapshot.
 
+## Known Failure Evidence (Windows 10 VM)
+
+Observed reboot evidence:
+
+- `bootmgr-experimental-vhd` entry was created from copied `{current}`.
+- Entry fields were changed to VHD device/osdevice and `\EFI\BOOT\BOOTX64.EFI`.
+- Selecting the entry led to Windows Automatic Repair; GRUB/Ubuntu was not reached.
+- Windows remained recoverable and booted normally afterward.
+
+Failure analysis:
+
+- Copying `{current}` preserves Windows OS loader semantics.
+- `systemroot`/recovery/osloader behavior remains tied to Windows loader expectations.
+- Setting `path \EFI\BOOT\BOOTX64.EFI` on copied Windows loader entry does not convert it into a generic EFI chainloader.
+
+As a result, strategy is marked known-failed with id:
+
+- `copied-current-osloader-vhd`
+
 ## Safety gate (required for real mutation)
 
 - Windows
@@ -17,6 +36,7 @@ Boot registration is separated from payload build.
 - `--execute-real-windows-ops`
 - `--i-understand-this-is-experimental`
 - `--confirm-vm-snapshot`
+- `--allow-known-failed-strategy` (required only for strategies marked known-failed)
 - `--no-dry-run`
 - lab/report constraints
 - BCD backup artifact path
@@ -58,6 +78,7 @@ Boot registration is separated from payload build.
 - Successful command execution does not imply Linux boot success.
 - Manual reboot verification in VM is mandatory.
 - VM snapshot is mandatory before real mutation.
+- Known-failed strategies return `registration_experimental_done_but_boot_failed` status when executed.
 
 ## Emergency rollback
 

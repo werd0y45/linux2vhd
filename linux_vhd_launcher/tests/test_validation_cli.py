@@ -69,6 +69,28 @@ def test_validation_windows_commands_are_gated(tmp_path: Path, monkeypatch) -> N
     assert mutation_code == 2
 
 
+def test_linux_refuses_mutation_command(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(cli, "is_windows_platform", lambda: False)
+    monkeypatch.setenv("LINUX_VHD_LAUNCHER_HOME", str(tmp_path / ".cfg"))
+    report_dir = tmp_path / "validation_run"
+    assert cli.main(["validation", "init", "--report-dir", str(report_dir)]) == 0
+    code = cli.main(
+        [
+            "validation",
+            "windows-bcd-mutation-smoke",
+            "--report-dir",
+            str(report_dir),
+            "--lab-dir",
+            str(report_dir / "lab"),
+            "--execute-real-windows-ops",
+            "--i-understand-this-is-experimental",
+            "--confirm-vm-snapshot",
+            "--no-dry-run",
+        ]
+    )
+    assert code == 2
+
+
 def test_validation_vm_status_and_run_campaign_safe_default(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:  # noqa: ANN001

@@ -351,12 +351,20 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_register.add_argument("--report-dir", type=Path, required=True)
     demo_live_register.add_argument(
         "--strategy",
-        choices=["auto", "bootmgr", "bootmgr-experimental-vhd", "firmware", "blocked"],
+        choices=[
+            "auto",
+            "bootmgr",
+            "bootmgr-experimental-vhd",
+            "firmware",
+            "firmware-efi-staged",
+            "blocked",
+        ],
         default="auto",
     )
     demo_live_register.add_argument("--execute-real-windows-ops", action="store_true")
     demo_live_register.add_argument("--i-understand-this-is-experimental", action="store_true")
     demo_live_register.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_register.add_argument("--allow-known-failed-strategy", action="store_true")
     demo_live_register.add_argument("--no-dry-run", action="store_true")
     demo_live_register.add_argument("--json", action="store_true")
 
@@ -370,12 +378,20 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_install.add_argument("--report-dir", type=Path, required=True)
     demo_live_install.add_argument(
         "--strategy",
-        choices=["auto", "bootmgr", "bootmgr-experimental-vhd", "firmware", "blocked"],
+        choices=[
+            "auto",
+            "bootmgr",
+            "bootmgr-experimental-vhd",
+            "firmware",
+            "firmware-efi-staged",
+            "blocked",
+        ],
         default="auto",
     )
     demo_live_install.add_argument("--execute-real-windows-ops", action="store_true")
     demo_live_install.add_argument("--i-understand-this-is-experimental", action="store_true")
     demo_live_install.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_install.add_argument("--allow-known-failed-strategy", action="store_true")
     demo_live_install.add_argument("--no-dry-run", action="store_true")
     demo_live_install.add_argument("--json", action="store_true")
 
@@ -1385,6 +1401,7 @@ def _demo_context_from_args(args: argparse.Namespace) -> DemoContext:
         execute_real_windows_ops=bool(getattr(args, "execute_real_windows_ops", False)),
         confirmation_token=bool(getattr(args, "i_understand_this_is_experimental", False)),
         confirm_vm_snapshot=bool(getattr(args, "confirm_vm_snapshot", False)),
+        allow_known_failed_strategy=bool(getattr(args, "allow_known_failed_strategy", False)),
     )
 
 

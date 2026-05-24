@@ -29,6 +29,7 @@ FINAL_DEMO_STATUS = Literal[
     "payload_built",
     "registration_blocked",
     "registration_experimental_done",
+    "registration_experimental_done_but_boot_failed",
     "registration_failed",
     "bootability_unverified",
     "bootability_confirmed_manual",
@@ -45,6 +46,7 @@ class DemoContext:
     execute_real_windows_ops: bool
     confirmation_token: bool
     confirm_vm_snapshot: bool
+    allow_known_failed_strategy: bool = False
 
 
 @dataclass(slots=True)
@@ -194,6 +196,7 @@ def register_live(
             execute_real_windows_ops=context.execute_real_windows_ops,
             confirmation_token=context.confirmation_token,
             confirm_vm_snapshot=context.confirm_vm_snapshot,
+            allow_known_failed_strategy=context.allow_known_failed_strategy,
         )
     )
 
@@ -205,6 +208,16 @@ def register_live(
             context.report_dir,
             status="bootability_unverified",
             notes=["registration_experimental_done", "Manual reboot test required."],
+        )
+    elif outcome.status == "registration_experimental_done_but_boot_failed":
+        known_failed = outcome.known_failed_strategy or "unknown"
+        _write_demo_status(
+            context.report_dir,
+            status="registration_experimental_done_but_boot_failed",
+            notes=[
+                f"known_failed_strategy: {known_failed}",
+                "bootability_unverified",
+            ],
         )
     elif outcome.status == "registration_failed":
         _write_demo_status(

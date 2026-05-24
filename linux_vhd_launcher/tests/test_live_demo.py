@@ -265,6 +265,7 @@ def test_register_bcd_experimental_refuses_on_linux(tmp_path: Path, monkeypatch:
         execute_real_windows_ops=True,
         confirmation_token=True,
         confirm_vm_snapshot=True,
+        allow_known_failed_strategy=True,
     )
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: False)
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: True)
@@ -293,6 +294,7 @@ def test_register_bcd_experimental_refuses_on_non_admin(
         execute_real_windows_ops=True,
         confirmation_token=True,
         confirm_vm_snapshot=True,
+        allow_known_failed_strategy=True,
     )
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: True)
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: False)
@@ -318,12 +320,13 @@ def test_register_bcd_experimental_requires_snapshot(tmp_path: Path) -> None:
         execute_real_windows_ops=True,
         confirmation_token=True,
         confirm_vm_snapshot=False,
+        allow_known_failed_strategy=True,
     )
     with pytest.raises(UnsafeRealOperationError, match="confirm-vm-snapshot"):
         strategy.register(req)
 
 
-def test_register_bcd_experimental_dry_run_includes_exact_plan(tmp_path: Path) -> None:
+def test_register_bcd_experimental_known_failed_blocked_by_default(tmp_path: Path) -> None:
     report_dir = tmp_path / "reports"
     lab_dir = tmp_path / "lab"
     report_dir.mkdir()
@@ -341,6 +344,32 @@ def test_register_bcd_experimental_dry_run_includes_exact_plan(tmp_path: Path) -
         execute_real_windows_ops=False,
         confirmation_token=False,
         confirm_vm_snapshot=False,
+        allow_known_failed_strategy=False,
+    )
+    out = strategy.register(req)
+    assert out.status == "registration_blocked"
+    assert out.known_failed_strategy == "copied-current-osloader-vhd"
+
+
+def test_register_bcd_experimental_dry_run_includes_exact_plan_when_allowed(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    lab_dir = tmp_path / "lab"
+    report_dir.mkdir()
+    lab_dir.mkdir()
+    strategy = choose_registration_strategy("bootmgr-experimental-vhd")
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=lab_dir / "ubuntu-live.vhdx",
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=lab_dir,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+        allow_known_failed_strategy=True,
     )
     out = strategy.register(req)
     assert out.status == "planned"
@@ -385,6 +414,7 @@ def test_register_bcd_experimental_real_records_commands_with_fake_runner(
     strategy = BcdBootMgrStrategy(
         name="bootmgr-experimental-vhd",
         allow_unconfirmed_direct_chain=True,
+        known_failed_strategy_id="copied-current-osloader-vhd",
         runner_factory=lambda: fake_runner,  # type: ignore[arg-type]
     )
     req = LiveRegistrationRequest(
@@ -399,6 +429,7 @@ def test_register_bcd_experimental_real_records_commands_with_fake_runner(
         execute_real_windows_ops=True,
         confirmation_token=True,
         confirm_vm_snapshot=True,
+        allow_known_failed_strategy=True,
     )
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: True)
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: True)
@@ -407,8 +438,9 @@ def test_register_bcd_experimental_real_records_commands_with_fake_runner(
         lambda self, **kwargs: None,
     )
     out = strategy.register(req)
-    assert out.status == "registration_experimental_done"
+    assert out.status == "registration_experimental_done_but_boot_failed"
     assert out.created_guid == "{11111111-1111-1111-1111-111111111111}"
+    assert out.known_failed_strategy == "copied-current-osloader-vhd"
     assert out.unregister_command == ["bcdedit", "/delete", out.created_guid, "/f"]
     recorded = [" ".join(item.command) for item in out.executed_commands]
     assert any("bcdedit /displayorder {11111111-1111-1111-1111-111111111111} /addlast" in c for c in recorded)
@@ -465,6 +497,7 @@ def test_register_bcd_experimental_failure_after_copy_rolls_back(
         execute_real_windows_ops=True,
         confirmation_token=True,
         confirm_vm_snapshot=True,
+        allow_known_failed_strategy=True,
     )
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: True)
     monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: True)
@@ -520,6 +553,10 @@ def test_cli_demo_help(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: 
         cli.main(["demo", "live", "--help"])
     live_output = capsys.readouterr().out
     assert "unregister-bcd" in live_output
+    with pytest.raises(SystemExit):
+        cli.main(["demo", "live", "register-bcd", "--help"])
+    register_help = capsys.readouterr().out
+    assert "firmware-efi-staged" in register_help
 
 
 def test_cli_demo_commands_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -587,6 +624,51 @@ def test_cli_demo_commands_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert register_code == 2
 
 
+def test_cli_known_failed_strategy_requires_allow_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LINUX_VHD_LAUNCHER_HOME", str(tmp_path / ".cfg"))
+    lab_dir = tmp_path / "lab"
+    report_dir = tmp_path / "reports"
+    lab_dir.mkdir()
+    report_dir.mkdir()
+    vhd_path = lab_dir / "ubuntu-live.vhdx"
+
+    blocked = cli.main(
+        [
+            "demo",
+            "live",
+            "register-bcd",
+            "--vhd",
+            str(vhd_path),
+            "--lab-dir",
+            str(lab_dir),
+            "--report-dir",
+            str(report_dir),
+            "--strategy",
+            "bootmgr-experimental-vhd",
+            "--json",
+        ]
+    )
+    allowed = cli.main(
+        [
+            "demo",
+            "live",
+            "register-bcd",
+            "--vhd",
+            str(vhd_path),
+            "--lab-dir",
+            str(lab_dir),
+            "--report-dir",
+            str(report_dir),
+            "--strategy",
+            "bootmgr-experimental-vhd",
+            "--allow-known-failed-strategy",
+            "--json",
+        ]
+    )
+    assert blocked == 2
+    assert allowed == 0
+
+
 def test_blocked_strategy_direct() -> None:
     strategy = BlockedUnsupportedStrategy(reason="blocked")
     out = strategy.register(
@@ -605,3 +687,41 @@ def test_blocked_strategy_direct() -> None:
         )
     )
     assert out.status == "registration_blocked"
+
+
+def test_firmware_efi_staged_strategy_dry_run_only(tmp_path: Path) -> None:
+    strategy = choose_registration_strategy("firmware-efi-staged")
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=tmp_path / "x.vhdx",
+            size_gb=12,
+        ),
+        report_dir=tmp_path,
+        lab_dir=tmp_path,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+    )
+    out = strategy.register(req)
+    assert out.status == "planned"
+    assert out.planned_commands
+
+    req_real = LiveRegistrationRequest(
+        layout=req.layout,
+        report_dir=req.report_dir,
+        lab_dir=req.lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=True,
+        confirmation_token=True,
+        confirm_vm_snapshot=True,
+    )
+    out_real = strategy.register(req_real)
+    assert out_real.status == "registration_blocked"
+
+
+def test_docs_bcd_registration_mentions_known_failed_analysis() -> None:
+    content = Path("docs/BCD_LIVE_REGISTRATION.md").read_text(encoding="utf-8")
+    assert "known-failed" in content.lower() or "known failed" in content.lower()
+    assert "copied" in content.lower()
