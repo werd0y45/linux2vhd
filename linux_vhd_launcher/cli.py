@@ -23,6 +23,7 @@ from linux_vhd_launcher.demo.live_vhd_demo import (
     plan_live,
     register_live,
     uninstall_live,
+    unregister_live_bcd,
 )
 from linux_vhd_launcher.demo.live_vhd_demo import (
     inspect_iso as demo_inspect_iso,
@@ -350,7 +351,7 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_register.add_argument("--report-dir", type=Path, required=True)
     demo_live_register.add_argument(
         "--strategy",
-        choices=["auto", "bootmgr", "firmware", "blocked"],
+        choices=["auto", "bootmgr", "bootmgr-experimental-vhd", "firmware", "blocked"],
         default="auto",
     )
     demo_live_register.add_argument("--execute-real-windows-ops", action="store_true")
@@ -369,7 +370,7 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_install.add_argument("--report-dir", type=Path, required=True)
     demo_live_install.add_argument(
         "--strategy",
-        choices=["auto", "bootmgr", "firmware", "blocked"],
+        choices=["auto", "bootmgr", "bootmgr-experimental-vhd", "firmware", "blocked"],
         default="auto",
     )
     demo_live_install.add_argument("--execute-real-windows-ops", action="store_true")
@@ -391,6 +392,17 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_uninstall.add_argument("--confirm-vm-snapshot", action="store_true")
     demo_live_uninstall.add_argument("--no-dry-run", action="store_true")
     demo_live_uninstall.add_argument("--json", action="store_true")
+
+    demo_live_unregister = demo_live_sub.add_parser(
+        "unregister-bcd", help="Delete experimental BCD entry by GUID"
+    )
+    demo_live_unregister.add_argument("--guid", required=True)
+    demo_live_unregister.add_argument("--report-dir", type=Path, required=True)
+    demo_live_unregister.add_argument("--execute-real-windows-ops", action="store_true")
+    demo_live_unregister.add_argument("--i-understand-this-is-experimental", action="store_true")
+    demo_live_unregister.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_unregister.add_argument("--no-dry-run", action="store_true")
+    demo_live_unregister.add_argument("--json", action="store_true")
 
     demo_live_mark_boot = demo_live_sub.add_parser(
         "mark-boot-result", help="Record manual reboot test result"
@@ -1364,9 +1376,11 @@ def _run_validation_command(args: argparse.Namespace) -> int:
 
 
 def _demo_context_from_args(args: argparse.Namespace) -> DemoContext:
+    report_dir = Path(args.report_dir)
+    lab_dir = Path(args.lab_dir) if getattr(args, "lab_dir", None) else report_dir
     return DemoContext(
-        lab_dir=Path(args.lab_dir),
-        report_dir=Path(args.report_dir),
+        lab_dir=lab_dir,
+        report_dir=report_dir,
         dry_run=not bool(getattr(args, "no_dry_run", False)),
         execute_real_windows_ops=bool(getattr(args, "execute_real_windows_ops", False)),
         confirmation_token=bool(getattr(args, "i_understand_this_is_experimental", False)),
@@ -1465,7 +1479,11 @@ def _run_demo_command(args: argparse.Namespace) -> int:
             strategy=str(args.strategy),
         )
         _print_demo_result(result, as_json=as_json)
-        return 2 if result.status == "registration_blocked" else 0
+        if result.status == "registration_blocked":
+            return 2
+        if result.status == "registration_failed":
+            return 1
+        return 0
 
     if args.demo_live_command == "install":
         result = install_live(
@@ -1476,7 +1494,19 @@ def _run_demo_command(args: argparse.Namespace) -> int:
             strategy=str(args.strategy),
         )
         _print_demo_result(result, as_json=as_json)
-        return 2 if result.status == "registration_blocked" else 0
+        if result.status == "registration_blocked":
+            return 2
+        if result.status == "registration_failed":
+            return 1
+        return 0
+
+    if args.demo_live_command == "unregister-bcd":
+        result = unregister_live_bcd(
+            context=context,
+            guid=str(args.guid),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 0
 
     if args.demo_live_command == "uninstall":
         guid = _resolve_demo_uninstall_guid(

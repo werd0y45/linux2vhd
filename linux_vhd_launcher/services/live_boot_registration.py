@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
@@ -35,12 +36,14 @@ class LiveRegistrationOutcome:
     """Result of registration strategy execution."""
 
     strategy: str
-    status: Literal["planned", "registration_blocked", "registration_experimental_done"]
+    status: Literal["planned", "registration_blocked", "registration_experimental_done", "registration_failed"]
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     created_guid: str | None = None
     backup_path: Path | None = None
+    planned_commands: list[list[str]] = field(default_factory=list)
     executed_commands: list[CommandResult] = field(default_factory=list)
+    unregister_command: list[str] | None = None
     rollback_actions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -51,6 +54,7 @@ class LiveRegistrationOutcome:
             "warnings": self.warnings,
             "created_guid": self.created_guid,
             "backup_path": str(self.backup_path) if self.backup_path else None,
+            "planned_commands": [list(item) for item in self.planned_commands],
             "executed_commands": [
                 {
                     "command": list(item.command),
@@ -60,6 +64,7 @@ class LiveRegistrationOutcome:
                 }
                 for item in self.executed_commands
             ],
+            "unregister_command": self.unregister_command,
             "rollback_actions": self.rollback_actions,
         }
 
@@ -115,14 +120,19 @@ class FirmwareStoreStrategy:
 class BcdBootMgrStrategy:
     """Experimental BCDEdit-based registration strategy."""
 
-    allow_unconfirmed_direct_chain: bool = False
     name: str = "bootmgr"
+    allow_unconfirmed_direct_chain: bool = False
+    runner_factory: Callable[[], CommandRunner] = CommandRunner
 
     def register(self, request: LiveRegistrationRequest) -> LiveRegistrationOutcome:
         report_dir = request.report_dir
-        report_dir.mkdir(parents=True, exist_ok=True)
+        if not report_dir.exists() or not report_dir.is_dir():
+            raise UnsafeRealOperationError("register-bcd requires existing --report-dir directory.")
+
         baseline_before = report_dir / "bcd_baseline_before.txt"
+        baseline_before_fw = report_dir / "bcd_baseline_before_firmware.txt"
         baseline_after = report_dir / "bcd_baseline_after.txt"
+        baseline_after_fw = report_dir / "bcd_baseline_after_firmware.txt"
         backup_path = report_dir / "bcd_backup_live_registration.bcd"
 
         if not self.allow_unconfirmed_direct_chain:
@@ -138,11 +148,19 @@ class BcdBootMgrStrategy:
                 ],
             )
 
+        vhd_device = _format_vhd_device(request.layout.vhd_path)
+        planned_commands = _planned_experimental_commands(
+            backup_path=backup_path,
+            vhd_device=vhd_device,
+            efi_path=request.layout.efi_loader_path.replace("/", "\\"),
+        )
+
         if request.dry_run:
             return LiveRegistrationOutcome(
                 strategy=self.name,
                 status="planned",
                 warnings=["Dry-run: BCD commands not executed."],
+                planned_commands=planned_commands,
             )
 
         if not request.confirm_vm_snapshot:
@@ -170,79 +188,71 @@ class BcdBootMgrStrategy:
             require_target_in_lab_dir=True,
         )
 
-        runner = CommandRunner(dry_run=False)
+        runner = self.runner_factory()
         outcome = LiveRegistrationOutcome(
             strategy=self.name,
             status="registration_experimental_done",
             backup_path=backup_path,
+            planned_commands=planned_commands,
             warnings=[
-                "Experimental registration done. Bootability remains unverified until manual reboot test."
+                "Experimental registration done. Bootability remains unverified until manual reboot test.",
+                "Microsoft documents Native Boot VHD(X) for Windows entries. Linux chain is experimental and unverified.",
             ],
         )
 
-        enum_before = runner.run(["bcdedit", "/enum", "all"], elevated_required=True, check=True)
-        baseline_before.write_text(enum_before.stdout, encoding="utf-8")
-        outcome.executed_commands.append(enum_before)
-
-        export_cmd = runner.run(["bcdedit", "/export", str(backup_path)], elevated_required=True, check=True)
-        outcome.executed_commands.append(export_cmd)
-
-        copy_cmd = runner.run(
-            ["bcdedit", "/copy", "{current}", "/d", "LinuxVHDLauncher Live (Experimental)"],
-            elevated_required=True,
-            check=True,
-        )
-        outcome.executed_commands.append(copy_cmd)
-        guid = _extract_guid(copy_cmd.stdout)
-        outcome.created_guid = guid
-
+        guid: str | None = None
         try:
-            vhd_device = f"vhd=[locate]{request.layout.vhd_path}"
-            set_device = runner.run(
-                ["bcdedit", "/set", guid, "device", vhd_device],
-                elevated_required=True,
-                check=True,
-            )
-            outcome.executed_commands.append(set_device)
-            set_osdevice = runner.run(
-                ["bcdedit", "/set", guid, "osdevice", vhd_device],
-                elevated_required=True,
-                check=True,
-            )
-            outcome.executed_commands.append(set_osdevice)
-            set_path = runner.run(
-                [
-                    "bcdedit",
-                    "/set",
-                    guid,
-                    "path",
-                    request.layout.efi_loader_path.replace("/", "\\"),
-                ],
-                elevated_required=True,
-                check=True,
-            )
-            outcome.executed_commands.append(set_path)
+            enum_before = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "all"])
+            baseline_before.write_text(enum_before.stdout, encoding="utf-8")
 
-            enum_after = runner.run(["bcdedit", "/enum", "all"], elevated_required=True, check=True)
+            enum_before_firmware = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "firmware"])
+            baseline_before_fw.write_text(enum_before_firmware.stdout, encoding="utf-8")
+
+            _run_and_collect(runner, outcome, ["bcdedit", "/export", str(backup_path)])
+
+            copy_cmd = _run_and_collect(
+                runner,
+                outcome,
+                ["bcdedit", "/copy", "{current}", "/d", "LinuxVHDLauncher Ubuntu Live VHDX EXPERIMENT"],
+            )
+            guid = _extract_guid(copy_cmd.stdout)
+            outcome.created_guid = guid
+
+            _run_and_collect(runner, outcome, ["bcdedit", "/set", guid, "device", vhd_device])
+            _run_and_collect(runner, outcome, ["bcdedit", "/set", guid, "osdevice", vhd_device])
+            _run_and_collect(
+                runner,
+                outcome,
+                ["bcdedit", "/set", guid, "path", request.layout.efi_loader_path.replace("/", "\\")],
+            )
+            _run_and_collect(runner, outcome, ["bcdedit", "/displayorder", guid, "/addlast"])
+
+            enum_after = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "all"])
             baseline_after.write_text(enum_after.stdout, encoding="utf-8")
-            outcome.executed_commands.append(enum_after)
-        except Exception:
-            rollback_errors: list[str] = []
-            try:
-                runner.run(["bcdedit", "/delete", guid, "/f"], elevated_required=True, check=False)
-                outcome.rollback_actions.append(f"deleted temporary GUID {guid}")
-            except Exception as exc:  # noqa: BLE001
-                rollback_errors.append(str(exc))
 
-            if rollback_errors:
-                outcome.rollback_actions.extend(rollback_errors)
-            raise
+            enum_after_firmware = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "firmware"])
+            baseline_after_fw.write_text(enum_after_firmware.stdout, encoding="utf-8")
+        except Exception as exc:
+            if guid is not None:
+                delete_result = runner.run(
+                    ["bcdedit", "/delete", guid, "/f"],
+                    elevated_required=True,
+                    check=False,
+                )
+                outcome.executed_commands.append(delete_result)
+                outcome.rollback_actions.append(f"bcdedit /delete {guid} /f")
+            outcome.status = "registration_failed"
+            outcome.blockers.append(str(exc))
+            outcome.warnings.append("Original command failure preserved in blockers/executed command evidence.")
+            return outcome
 
+        outcome.unregister_command = ["bcdedit", "/delete", guid, "/f"] if guid is not None else None
         manifest = {
             "strategy": self.name,
             "guid": outcome.created_guid,
             "backup": str(backup_path),
             "vhd": str(request.layout.vhd_path),
+            "unregister_command": outcome.unregister_command,
         }
         (request.report_dir / "live_registration_manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n",
@@ -264,6 +274,8 @@ def choose_registration_strategy(
         return FirmwareStoreStrategy()
     if value == "bootmgr":
         return BcdBootMgrStrategy(allow_unconfirmed_direct_chain=allow_unconfirmed_direct_chain)
+    if value == "bootmgr-experimental-vhd":
+        return BcdBootMgrStrategy(name="bootmgr-experimental-vhd", allow_unconfirmed_direct_chain=True)
     if value == "auto":
         return BlockedUnsupportedStrategy(
             reason=(
@@ -278,3 +290,47 @@ def _extract_guid(output: str) -> str:
     if not match:
         raise RuntimeError("Could not parse GUID from bcdedit output")
     return match.group(0)
+
+
+def _format_vhd_device(vhd_path: Path) -> str:
+    raw = str(vhd_path).replace("/", "\\")
+    drive_match = re.match(r"^([a-zA-Z]):\\", raw)
+    if drive_match:
+        drive = drive_match.group(1).upper()
+        return f"vhd=[{drive}:]{raw[2:]}"
+    return f"vhd=[locate]{raw}"
+
+
+def _run_and_collect(
+    runner: CommandRunner,
+    outcome: LiveRegistrationOutcome,
+    command: list[str],
+) -> CommandResult:
+    result = runner.run(command, elevated_required=True, check=False)
+    outcome.executed_commands.append(result)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Command failed ({result.returncode}): {' '.join(command)} "
+            f"stdout={result.stdout.strip()} stderr={result.stderr.strip()}"
+        )
+    return result
+
+
+def _planned_experimental_commands(
+    *,
+    backup_path: Path,
+    vhd_device: str,
+    efi_path: str,
+) -> list[list[str]]:
+    return [
+        ["bcdedit", "/enum", "all"],
+        ["bcdedit", "/enum", "firmware"],
+        ["bcdedit", "/export", str(backup_path)],
+        ["bcdedit", "/copy", "{current}", "/d", "LinuxVHDLauncher Ubuntu Live VHDX EXPERIMENT"],
+        ["bcdedit", "/set", "{GUID}", "device", vhd_device],
+        ["bcdedit", "/set", "{GUID}", "osdevice", vhd_device],
+        ["bcdedit", "/set", "{GUID}", "path", efi_path],
+        ["bcdedit", "/displayorder", "{GUID}", "/addlast"],
+        ["bcdedit", "/enum", "all"],
+        ["bcdedit", "/enum", "firmware"],
+    ]

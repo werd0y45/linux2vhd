@@ -29,6 +29,7 @@ FINAL_DEMO_STATUS = Literal[
     "payload_built",
     "registration_blocked",
     "registration_experimental_done",
+    "registration_failed",
     "bootability_unverified",
     "bootability_confirmed_manual",
 ]
@@ -167,7 +168,10 @@ def register_live(
     strategy: str,
 ) -> DemoExecutionResult:
     """Run registration strategy and persist artifacts."""
-    _ensure_paths(context)
+    if not context.report_dir.exists() or not context.report_dir.is_dir():
+        raise UnsafeRealOperationError("register-bcd requires existing --report-dir directory.")
+    if not context.lab_dir.exists() or not context.lab_dir.is_dir():
+        raise UnsafeRealOperationError("register-bcd requires existing --lab-dir directory.")
 
     layout = LiveVhdLayout(
         vhd_path=vhd_path,
@@ -199,8 +203,14 @@ def register_live(
     if outcome.status == "registration_experimental_done":
         _write_demo_status(
             context.report_dir,
-            status="registration_experimental_done",
-            notes=["Bootability remains unverified until manual reboot test."],
+            status="bootability_unverified",
+            notes=["registration_experimental_done", "Manual reboot test required."],
+        )
+    elif outcome.status == "registration_failed":
+        _write_demo_status(
+            context.report_dir,
+            status="bootability_unverified",
+            notes=["registration_failed"] + outcome.blockers,
         )
     elif outcome.status == "registration_blocked":
         _write_demo_status(
@@ -216,6 +226,56 @@ def register_live(
         warnings=outcome.warnings,
         blockers=outcome.blockers,
     )
+
+
+def unregister_live_bcd(
+    *,
+    context: DemoContext,
+    guid: str,
+) -> DemoExecutionResult:
+    """Delete experimental BCD entry by GUID using full real-operation gate."""
+    if not context.report_dir.exists() or not context.report_dir.is_dir():
+        raise UnsafeRealOperationError("unregister-bcd requires existing --report-dir directory.")
+
+    command = ["bcdedit", "/delete", guid, "/f"]
+    if context.dry_run:
+        dry_payload = {
+            "status": "planned",
+            "command": command,
+            "notes": ["Dry-run only."],
+        }
+        (context.report_dir / "live_unregistration_outcome.json").write_text(
+            json.dumps(dry_payload, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return DemoExecutionResult(status="planned", warnings=["Dry-run: no BCD mutation executed."])
+
+    _enforce_real_gate(context)
+    if not is_windows_platform():
+        raise UnsafeRealOperationError("Real unregister requires Windows host.")
+
+    from linux_vhd_launcher.system.runner import CommandRunner
+
+    runner = CommandRunner(dry_run=False)
+    result = runner.run(command, elevated_required=True, check=True)
+    payload: dict[str, object] = {
+        "status": "registration_experimental_done",
+        "command": command,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "rollback": "Use bcdedit /import <backup> only in explicit emergency mode.",
+    }
+    (context.report_dir / "live_unregistration_outcome.json").write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _write_demo_status(
+        context.report_dir,
+        status="bootability_unverified",
+        notes=["experimental BCD entry removed"],
+    )
+    return DemoExecutionResult(status="registration_experimental_done")
 
 
 def install_live(
