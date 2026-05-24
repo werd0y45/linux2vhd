@@ -141,6 +141,86 @@ class OperationPlan:
 
 
 @dataclass(slots=True)
+class LiveIsoInfo:
+    """Metadata discovered from a live Linux ISO payload."""
+
+    iso_path: Path
+    distro: str
+    version: str | None
+    sha256: str
+    size_bytes: int
+    has_efi_boot: bool
+    has_shim: bool
+    has_grub: bool
+    has_casper_kernel: bool
+    kernel_path: str | None
+    initrd_path: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "iso_path": str(self.iso_path),
+            "distro": self.distro,
+            "version": self.version,
+            "sha256": self.sha256,
+            "size_bytes": self.size_bytes,
+            "has_efi_boot": self.has_efi_boot,
+            "has_shim": self.has_shim,
+            "has_grub": self.has_grub,
+            "has_casper_kernel": self.has_casper_kernel,
+            "kernel_path": self.kernel_path,
+            "initrd_path": self.initrd_path,
+        }
+
+
+@dataclass(slots=True)
+class LiveVhdLayout:
+    """Filesystem layout parameters for live-ISO VHD payload."""
+
+    vhd_path: Path
+    format: Literal["vhdx", "vhd"]
+    size_gb: int
+    efi_partition_size_mb: int
+    data_partition_fs: Literal["ntfs", "exfat", "fat32"]
+    iso_inside_path: str
+    efi_loader_path: str
+    grub_cfg_path: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "vhd_path": str(self.vhd_path),
+            "format": self.format,
+            "size_gb": self.size_gb,
+            "efi_partition_size_mb": self.efi_partition_size_mb,
+            "data_partition_fs": self.data_partition_fs,
+            "iso_inside_path": self.iso_inside_path,
+            "efi_loader_path": self.efi_loader_path,
+            "grub_cfg_path": self.grub_cfg_path,
+        }
+
+
+@dataclass(slots=True)
+class LiveVhdBuildPlan:
+    """Planned live-ISO payload build with explicit warnings and blockers."""
+
+    iso: LiveIsoInfo
+    layout: LiveVhdLayout
+    steps: list[PlannedStep]
+    warnings: list[str]
+    blockers: list[str]
+    experimental: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "iso": self.iso.to_dict(),
+            "layout": self.layout.to_dict(),
+            "steps": [step.to_dict() for step in self.steps],
+            "warnings": self.warnings,
+            "blockers": self.blockers,
+            "experimental": self.experimental,
+        }
+
+
+@dataclass(slots=True)
 class DoctorReport:
     """Structured diagnostics used in validation reports."""
 

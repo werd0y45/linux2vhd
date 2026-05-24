@@ -15,6 +15,18 @@ from typing import Any
 
 from linux_vhd_launcher.capabilities import run_capability_scanners
 from linux_vhd_launcher.config import ConfigManager, RegistryStore
+from linux_vhd_launcher.demo.live_vhd_demo import (
+    DemoContext,
+    build_payload,
+    install_live,
+    mark_boot_result,
+    plan_live,
+    register_live,
+    uninstall_live,
+)
+from linux_vhd_launcher.demo.live_vhd_demo import (
+    inspect_iso as demo_inspect_iso,
+)
 from linux_vhd_launcher.errors import (
     LinuxVhdLauncherError,
     RegistryFormatError,
@@ -300,6 +312,97 @@ def _build_parser() -> argparse.ArgumentParser:
     validation_bundle.add_argument("--report-dir", type=Path, required=True)
     validation_bundle.add_argument("--redact", action="store_true")
     validation_bundle.add_argument("--format", choices=["zip", "targz"], default="zip")
+
+    demo = sub.add_parser("demo", help="Live ISO VHD demo workflow commands")
+    demo_sub = demo.add_subparsers(dest="demo_command", required=True)
+
+    demo_inspect = demo_sub.add_parser("inspect-iso", help="Inspect live ISO layout")
+    demo_inspect.add_argument("--iso", type=Path, required=True)
+    demo_inspect.add_argument("--json", action="store_true")
+
+    demo_live = demo_sub.add_parser("live", help="Live VHD payload demo operations")
+    demo_live_sub = demo_live.add_subparsers(dest="demo_live_command", required=True)
+
+    demo_live_plan = demo_live_sub.add_parser("plan", help="Plan live VHD payload build")
+    demo_live_plan.add_argument("--iso", type=Path, required=True)
+    demo_live_plan.add_argument("--vhd", type=Path, required=True)
+    demo_live_plan.add_argument("--size-gb", type=int, required=True)
+    demo_live_plan.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_plan.add_argument("--json", action="store_true")
+
+    demo_live_build = demo_live_sub.add_parser("build-vhd", help="Build live ISO payload in VHD")
+    demo_live_build.add_argument("--iso", type=Path, required=True)
+    demo_live_build.add_argument("--vhd", type=Path, required=True)
+    demo_live_build.add_argument("--size-gb", type=int, required=True)
+    demo_live_build.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_build.add_argument("--report-dir", type=Path, required=True)
+    demo_live_build.add_argument("--execute-real-windows-ops", action="store_true")
+    demo_live_build.add_argument("--i-understand-this-is-experimental", action="store_true")
+    demo_live_build.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_build.add_argument("--no-dry-run", action="store_true")
+    demo_live_build.add_argument("--json", action="store_true")
+
+    demo_live_register = demo_live_sub.add_parser(
+        "register-bcd", help="Register experimental boot entry for built VHD"
+    )
+    demo_live_register.add_argument("--vhd", type=Path, required=True)
+    demo_live_register.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_register.add_argument("--report-dir", type=Path, required=True)
+    demo_live_register.add_argument(
+        "--strategy",
+        choices=["auto", "bootmgr", "firmware", "blocked"],
+        default="auto",
+    )
+    demo_live_register.add_argument("--execute-real-windows-ops", action="store_true")
+    demo_live_register.add_argument("--i-understand-this-is-experimental", action="store_true")
+    demo_live_register.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_register.add_argument("--no-dry-run", action="store_true")
+    demo_live_register.add_argument("--json", action="store_true")
+
+    demo_live_install = demo_live_sub.add_parser(
+        "install", help="Combined payload build and registration experiment"
+    )
+    demo_live_install.add_argument("--iso", type=Path, required=True)
+    demo_live_install.add_argument("--vhd", type=Path, required=True)
+    demo_live_install.add_argument("--size-gb", type=int, required=True)
+    demo_live_install.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_install.add_argument("--report-dir", type=Path, required=True)
+    demo_live_install.add_argument(
+        "--strategy",
+        choices=["auto", "bootmgr", "firmware", "blocked"],
+        default="auto",
+    )
+    demo_live_install.add_argument("--execute-real-windows-ops", action="store_true")
+    demo_live_install.add_argument("--i-understand-this-is-experimental", action="store_true")
+    demo_live_install.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_install.add_argument("--no-dry-run", action="store_true")
+    demo_live_install.add_argument("--json", action="store_true")
+
+    demo_live_uninstall = demo_live_sub.add_parser(
+        "uninstall", help="Unregister temporary demo boot entry created by this app"
+    )
+    demo_live_uninstall.add_argument("--guid")
+    demo_live_uninstall.add_argument("--vhd", type=Path)
+    demo_live_uninstall.add_argument("--delete-vhd", action="store_true")
+    demo_live_uninstall.add_argument("--lab-dir", type=Path, required=True)
+    demo_live_uninstall.add_argument("--report-dir", type=Path, required=True)
+    demo_live_uninstall.add_argument("--execute-real-windows-ops", action="store_true")
+    demo_live_uninstall.add_argument("--i-understand-this-is-experimental", action="store_true")
+    demo_live_uninstall.add_argument("--confirm-vm-snapshot", action="store_true")
+    demo_live_uninstall.add_argument("--no-dry-run", action="store_true")
+    demo_live_uninstall.add_argument("--json", action="store_true")
+
+    demo_live_mark_boot = demo_live_sub.add_parser(
+        "mark-boot-result", help="Record manual reboot test result"
+    )
+    demo_live_mark_boot.add_argument("--report-dir", type=Path, required=True)
+    demo_live_mark_boot.add_argument(
+        "--result",
+        choices=["booted", "failed", "not-tested"],
+        required=True,
+    )
+    demo_live_mark_boot.add_argument("--notes", default="")
+    demo_live_mark_boot.add_argument("--json", action="store_true")
     return parser
 
 
@@ -1260,6 +1363,140 @@ def _run_validation_command(args: argparse.Namespace) -> int:
     )
 
 
+def _demo_context_from_args(args: argparse.Namespace) -> DemoContext:
+    return DemoContext(
+        lab_dir=Path(args.lab_dir),
+        report_dir=Path(args.report_dir),
+        dry_run=not bool(getattr(args, "no_dry_run", False)),
+        execute_real_windows_ops=bool(getattr(args, "execute_real_windows_ops", False)),
+        confirmation_token=bool(getattr(args, "i_understand_this_is_experimental", False)),
+        confirm_vm_snapshot=bool(getattr(args, "confirm_vm_snapshot", False)),
+    )
+
+
+def _print_demo_result(result: object, *, as_json: bool) -> None:
+    payload: dict[str, object]
+    to_dict = getattr(result, "to_dict", None)
+    if callable(to_dict):
+        raw = to_dict()
+        payload = raw if isinstance(raw, dict) else {"result": str(raw)}
+    else:
+        payload = {"result": str(result)}
+
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
+
+    status = payload.get("status", "unknown") if isinstance(payload, dict) else "unknown"
+    print(f"status: {status}")
+    if isinstance(payload, dict):
+        blockers = payload.get("blockers")
+        warnings_raw = payload.get("warnings")
+        if isinstance(blockers, list) and blockers:
+            print("blockers:")
+            for blocker in blockers:
+                print(f"- {blocker}")
+        if isinstance(warnings_raw, list) and warnings_raw:
+            print("warnings:")
+            for warning in warnings_raw:
+                print(f"- {warning}")
+
+
+def _resolve_demo_uninstall_guid(*, report_dir: Path, explicit_guid: str | None) -> str:
+    if explicit_guid:
+        return explicit_guid
+    manifest_path = report_dir / "live_registration_manifest.json"
+    if not manifest_path.exists():
+        raise UnsafeRealOperationError(
+            "GUID is required when registration manifest is missing."
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    guid = str(manifest.get("guid", "")).strip()
+    if not guid:
+        raise UnsafeRealOperationError("Registration manifest does not contain GUID.")
+    return guid
+
+
+def _run_demo_command(args: argparse.Namespace) -> int:
+    as_json = bool(getattr(args, "json", False))
+
+    if args.demo_command == "inspect-iso":
+        result = demo_inspect_iso(iso_path=Path(args.iso))
+        _print_demo_result(result, as_json=as_json)
+        return 0
+
+    if args.demo_command != "live":
+        raise ValidationReportFormatError(f"Unsupported demo command: {args.demo_command}")
+
+    if args.demo_live_command == "plan":
+        result = plan_live(
+            iso_path=Path(args.iso),
+            vhd_path=Path(args.vhd),
+            size_gb=int(args.size_gb),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 0
+
+    if args.demo_live_command == "mark-boot-result":
+        result = mark_boot_result(
+            report_dir=Path(args.report_dir),
+            result=args.result,
+            notes=str(args.notes),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 0
+
+    context = _demo_context_from_args(args)
+
+    if args.demo_live_command == "build-vhd":
+        result = build_payload(
+            context=context,
+            iso_path=Path(args.iso),
+            vhd_path=Path(args.vhd),
+            size_gb=int(args.size_gb),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 0
+
+    if args.demo_live_command == "register-bcd":
+        result = register_live(
+            context=context,
+            vhd_path=Path(args.vhd),
+            strategy=str(args.strategy),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 2 if result.status == "registration_blocked" else 0
+
+    if args.demo_live_command == "install":
+        result = install_live(
+            context=context,
+            iso_path=Path(args.iso),
+            vhd_path=Path(args.vhd),
+            size_gb=int(args.size_gb),
+            strategy=str(args.strategy),
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 2 if result.status == "registration_blocked" else 0
+
+    if args.demo_live_command == "uninstall":
+        guid = _resolve_demo_uninstall_guid(
+            report_dir=context.report_dir,
+            explicit_guid=str(args.guid) if args.guid else None,
+        )
+        result = uninstall_live(
+            context=context,
+            guid=guid,
+            delete_vhd=bool(args.delete_vhd),
+            vhd_path=Path(args.vhd) if args.vhd is not None else None,
+        )
+        _print_demo_result(result, as_json=as_json)
+        return 0
+
+    raise ValidationReportFormatError(
+        f"Unsupported demo live command: {args.demo_live_command}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI main entrypoint."""
     parser = _build_parser()
@@ -1275,6 +1512,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "validation":
             return _run_validation_command(args)
+        if args.command == "demo":
+            return _run_demo_command(args)
 
         if args.command == "doctor":
             doctor_payload = _doctor()

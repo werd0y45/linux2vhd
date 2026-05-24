@@ -1,50 +1,46 @@
-# Safety Model
+# SAFETY
 
-## Dangerous operations
+This project is demo-first for disposable VM validation, not production installation.
 
-Potentially dangerous actions:
-- Creating/attaching/detaching VHD/VHDX on Windows.
-- Modifying Boot Configuration Data (BCD).
+## Non-negotiable rules
 
-These actions are now hard-gated by `RealWindowsOpsGate` and require explicit CLI opt-in flags.
-For v0.4 guarded real operations are allowed only when all conditions are true:
-- Windows platform.
-- Administrator token.
-- Explicit execute flag.
-- Dry-run disabled for the command.
-- Experimental confirmation token provided.
-- Rollback plan is defined.
-- Validation report path is configured.
-- Target path is inside allowed validation lab directory.
+- Never mutate Windows boot on a production machine.
+- Always snapshot VM before real operations.
+- Keep all mutable files in lab directory.
+- Do not touch physical partitions except read-only probing and controlled BCD export/entry mutation.
 
-No code path is intended to repartition physical disks.
+## Real operation gates
 
-## dry-run behavior
+Real operations require all of:
 
-`CommandRunner(dry_run=True)` returns successful `CommandResult` without executing system commands.
-Dry-run is the default safe mode for Linux validation.
+- Windows host
+- admin privileges
+- `--execute-real-windows-ops`
+- `--i-understand-this-is-experimental`
+- `--confirm-vm-snapshot`
+- `--no-dry-run`
 
-## BCD backup strategy
+Additionally:
 
-Before BCD mutation, installer exports backup via:
-- `bcdedit /export <backup-path>`
+- rollback plan must exist
+- report path must exist
+- target path must be inside allowed lab dir
 
-Backup path is logged and persisted in registry metadata when available.
-Real mode requires backup path to be configured before operation execution.
+## Prohibited shortcuts
 
-## Uninstall behavior
+- No silent BCD mutation.
+- No unsupported `bcdedit` usage claims.
+- No automatic `{bootmgr}` path changes.
+- No implicit `displayorder` modifications.
+- No automatic BCD import restore in normal flow.
 
-Uninstall removes:
-- BCD entry.
-- Local registry record.
-- Best-effort VHD detach.
+## Explicitly unconfirmed areas
 
-## Secure Boot limitations
+- Direct boot chain from BCD into Linux EFI payload inside VHDX is **не подтверждено**.
+- EFI visibility/behavior for nested VHDX payload with arbitrary firmware paths is **не подтверждено**.
 
-Current prototype only validates required EFI files exist in staging.
-It does not:
-- disable Secure Boot,
-- sign bootloaders,
-- guarantee trust chain compatibility.
+## Status vocabulary
 
-See `docs/FEASIBILITY.md` for boot-chain caveats.
+- `payload_built` != booted system.
+- `registration_experimental_done` != booted system.
+- `bootability_confirmed_manual` requires real reboot evidence.

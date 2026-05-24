@@ -12,6 +12,7 @@ build/
 
 .linux_vhd_launcher/
 validation_reports/
+caches/
 *.log
 *.bcd
 *.vhd
