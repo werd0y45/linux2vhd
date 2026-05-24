@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.26.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "linux-vhd-launcher"
+version = "0.4.0"
+description = "Prototype Linux-to-VHD/VHDX installer using Windows Boot Manager"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "LinuxVHDLauncher Contributors" }]
+dependencies = [
+  "PyQt6>=6.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "ruff>=0.6.0",
+  "mypy>=1.11.0",
+  "pyright>=1.1.390",
+  "build>=1.2.2",
+  "PyQt6>=6.7.0",
+]
+
+[project.scripts]
+linux-vhd-launcher = "linux_vhd_launcher.cli:main"
+linux-vhd-launcher-gui = "linux_vhd_launcher.app:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["linux_vhd_launcher/tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", ".tools", ".pytest_cache", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+show_error_codes = true
+exclude = ["^\\.venv", "^\\.tools", "^linux_vhd_launcher/tests/"]
+
+[[tool.mypy.overrides]]
+module = "PyQt6.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["linux_vhd_launcher.gui.*", "linux_vhd_launcher.app"]
+ignore_errors = true
+
+[tool.pyright]
+include = ["linux_vhd_launcher"]
+exclude = [".venv", ".tools", "**/__pycache__", "linux_vhd_launcher/tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+extraPaths = ["."]
+reportMissingImports = "warning"
+reportMissingTypeStubs = false

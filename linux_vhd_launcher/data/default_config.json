@@ -1,0 +1,8 @@
+{
+  "default_vhd_dir": "./vhd",
+  "default_vhd_size_gb": 40,
+  "bcd_backup_dir": "./backups",
+  "log_level": "INFO",
+  "catalog_path": "./catalog.json",
+  "registry_path": "./vhd_registry.json"
+}
