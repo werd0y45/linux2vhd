@@ -122,10 +122,36 @@ def test_build_vhd_dry_run_records_artifacts(tmp_path: Path) -> None:
     assert (ctx.report_dir / "live_build_outcome.json").exists()
 
 
-def test_build_live_vhd_real_refused_on_linux(tmp_path: Path) -> None:
+def test_build_live_vhd_real_refused_on_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     iso_info = _make_iso_info(tmp_path / "ubuntu.iso")
     layout = build_live_vhd_layout(iso_info=iso_info, vhd_path=tmp_path / "x.vhdx", size_gb=12)
+
+    monkeypatch.setattr("linux_vhd_launcher.services.live_payload.is_windows_platform", lambda: False)
+
     with pytest.raises(UnsupportedPlatformError):
+        build_live_vhd(
+            iso=iso_info,
+            layout=layout,
+            lab_dir=tmp_path,
+            report_dir=tmp_path / "reports",
+            dry_run=False,
+            execute_real_windows_ops=True,
+            confirmation_token=True,
+            confirm_vm_snapshot=True,
+        )
+
+
+def test_build_live_vhd_real_refused_on_windows_non_admin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    iso_info = _make_iso_info(tmp_path / "ubuntu.iso")
+    layout = build_live_vhd_layout(iso_info=iso_info, vhd_path=tmp_path / "x.vhdx", size_gb=12)
+
+    monkeypatch.setattr("linux_vhd_launcher.services.live_payload.is_windows_platform", lambda: True)
+    monkeypatch.setattr("linux_vhd_launcher.services.live_payload.is_admin", lambda: False)
+
+    with pytest.raises(UnsafeRealOperationError, match="administrator privileges"):
         build_live_vhd(
             iso=iso_info,
             layout=layout,

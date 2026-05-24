@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from linux_vhd_launcher.system.runner import CommandRunner
@@ -15,4 +17,4 @@ def test_command_runner_dry_run() -> None:
 def test_command_runner_check_raises() -> None:
     runner = CommandRunner(dry_run=False)
     with pytest.raises(RuntimeError):
-        runner.run(["bash", "-lc", "exit 2"], check=True)
+        runner.run([sys.executable, "-c", "import sys; sys.exit(2)"], check=True)
