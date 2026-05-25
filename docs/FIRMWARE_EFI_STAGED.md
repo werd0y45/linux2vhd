@@ -41,9 +41,14 @@ Interpretation:
 
 ## Probe dependency
 
-- Run `demo bcd probe-application-types` first.
-- If offline report contains `bootapp` in `supported_types`, project enables dry-run strategy `firmware-efi-bootapp-probe`.
-- If `bootapp` is absent or rejected, `firmware-efi-staged` stays blocked for real mode and docs status remains: `BCD generic EFI chain remains unconfirmed`.
+- Run `demo bcd probe-bootapp-elements` first.
+- If offline report confirms:
+  - BOOTAPP `/create` accepted
+  - BOOTAPP `device` (`partition=C:` in probe) accepted
+  - BOOTAPP `path` (`\EFI\LinuxVHDLauncher\ubuntu-live\BOOTX64.EFI` in probe) accepted
+  then project enables dry-run strategy `firmware-efi-bootapp-system-dry-run`.
+- If BOOTAPP exists but required elements are not accepted, `firmware-efi-staged` remains blocked and decision text is:
+  - `bootapp exists but required elements were not accepted in offline probe.`
 
 ## What remains unverified until reboot test
 

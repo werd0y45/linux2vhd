@@ -48,7 +48,11 @@ from linux_vhd_launcher.models import (
     VhdSpec,
     VmRunnerConfig,
 )
-from linux_vhd_launcher.services.bcd_probe import probe_bcd_application_types
+from linux_vhd_launcher.services.bcd_probe import (
+    analyze_bcd_bootapp_probe_report,
+    probe_bcd_application_types,
+    probe_bcd_bootapp_elements,
+)
 from linux_vhd_launcher.services.boot_manager import BootManager, RegistryUpdater
 from linux_vhd_launcher.services.installer_service import (
     FakeDeploymentBackend,
@@ -332,6 +336,19 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_bcd_probe.add_argument("--lab-dir", type=Path, required=True)
     demo_bcd_probe.add_argument("--report-dir", type=Path, required=True)
     demo_bcd_probe.add_argument("--json", action="store_true")
+    demo_bcd_bootapp = demo_bcd_sub.add_parser(
+        "probe-bootapp-elements",
+        help="Probe BCDEdit BOOTAPP element support in offline BCD store only",
+    )
+    demo_bcd_bootapp.add_argument("--lab-dir", type=Path, required=True)
+    demo_bcd_bootapp.add_argument("--report-dir", type=Path, required=True)
+    demo_bcd_bootapp.add_argument("--json", action="store_true")
+    demo_bcd_analyze = demo_bcd_sub.add_parser(
+        "analyze-bootapp-probe",
+        help="Analyze offline BOOTAPP element probe report and recommend next strategy",
+    )
+    demo_bcd_analyze.add_argument("--probe-report", type=Path, required=True)
+    demo_bcd_analyze.add_argument("--json", action="store_true")
 
     demo_live = demo_sub.add_parser("live", help="Live VHD payload demo operations")
     demo_live_sub = demo_live.add_subparsers(dest="demo_live_command", required=True)
@@ -370,6 +387,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "firmware",
             "firmware-efi-staged",
             "firmware-efi-bootapp-probe",
+            "firmware-efi-bootapp-system-dry-run",
             "blocked",
         ],
         default="auto",
@@ -401,6 +419,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "firmware",
             "firmware-efi-staged",
             "firmware-efi-bootapp-probe",
+            "firmware-efi-bootapp-system-dry-run",
             "blocked",
         ],
         default="auto",
@@ -1510,25 +1529,48 @@ def _run_demo_command(args: argparse.Namespace) -> int:
         return 0
 
     if args.demo_command == "bcd":
-        if args.demo_bcd_command != "probe-application-types":
-            raise ValidationReportFormatError(
-                f"Unsupported demo bcd command: {args.demo_bcd_command}"
+        if args.demo_bcd_command == "probe-application-types":
+            outcome = probe_bcd_application_types(
+                lab_dir=Path(args.lab_dir),
+                report_dir=Path(args.report_dir),
             )
-        outcome = probe_bcd_application_types(
-            lab_dir=Path(args.lab_dir),
-            report_dir=Path(args.report_dir),
-        )
-        payload = outcome.to_dict()
-        if as_json:
+            payload = outcome.to_dict()
+            if as_json:
+                print(json.dumps(payload, indent=2))
+            else:
+                supported = ", ".join(outcome.report.supported_types) or "<none>"
+                print("status: planned")
+                print(f"store_path: {outcome.report.store_path}")
+                print(f"supported_types: {supported}")
+                if outcome.report.blocked_reason:
+                    print(f"blocked_reason: {outcome.report.blocked_reason}")
+            return 0
+
+        if args.demo_bcd_command == "probe-bootapp-elements":
+            outcome = probe_bcd_bootapp_elements(
+                lab_dir=Path(args.lab_dir),
+                report_dir=Path(args.report_dir),
+            )
+            payload = outcome.to_dict()
+            if as_json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print("status: planned")
+                print(f"store_path: {outcome.report.store_path}")
+                print(f"create_supported: {outcome.report.create_supported}")
+                print(f"conclusion: {outcome.report.conclusion}")
+            return 0
+
+        if args.demo_bcd_command == "analyze-bootapp-probe":
+            payload = analyze_bcd_bootapp_probe_report(
+                probe_report_path=Path(args.probe_report)
+            )
             print(json.dumps(payload, indent=2))
-        else:
-            supported = ", ".join(outcome.report.supported_types) or "<none>"
-            print("status: planned")
-            print(f"store_path: {outcome.report.store_path}")
-            print(f"supported_types: {supported}")
-            if outcome.report.blocked_reason:
-                print(f"blocked_reason: {outcome.report.blocked_reason}")
-        return 0
+            return 0
+
+        raise ValidationReportFormatError(
+            f"Unsupported demo bcd command: {args.demo_bcd_command}"
+        )
 
     if args.demo_command != "live":
         raise ValidationReportFormatError(f"Unsupported demo command: {args.demo_command}")

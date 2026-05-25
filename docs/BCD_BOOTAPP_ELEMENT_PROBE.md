@@ -1,0 +1,49 @@
+# BCD_BOOTAPP_ELEMENT_PROBE
+
+## Purpose
+
+`demo bcd probe-bootapp-elements` checks whether an offline BOOTAPP object accepts key elements:
+
+- `device`
+- `path`
+- `description`
+
+It runs only against an offline store and writes structured evidence.
+
+## Safety model
+
+Probe store path:
+
+- `C:\LVHLab\bcd_probe\bootapp_elements_probe.bcd`
+
+All mutating commands use:
+
+- `bcdedit /store <offline-store> ...`
+
+This is safer than touching the live system store because:
+
+- no mutation of active boot menu
+- no `{bootmgr}` rewrite
+- no `{fwbootmgr}` rewrite
+- no `default` change
+- no system `displayorder` change
+
+## What it verifies
+
+- Offline `/create /application bootapp` parser acceptance.
+- Offline `/set` acceptance for tested element/value pairs.
+- Whether `bcdedit /enum all /v` shows resulting object state.
+
+## What it does not verify
+
+- It does not verify firmware execution path.
+- It does not verify Windows Boot Manager runtime behavior.
+- It does not verify Secure Boot compatibility for shim/grub.
+- It does not verify Ubuntu/GRUB boot success.
+
+## Important interpretation rule
+
+Even when `bcdedit /set {GUID} path ...` is accepted in an offline store, this only proves syntactic/semantic acceptance by BCDEdit parser for that store.
+
+It is not proof of bootability.
+

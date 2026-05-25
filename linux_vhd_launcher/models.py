@@ -309,6 +309,63 @@ class BcdProbeReport:
 
 
 @dataclass(slots=True)
+class BcdElementSetProbe:
+    """Single offline BCD element set probe result for bootapp entry."""
+
+    element: str
+    value: str
+    supported: bool
+    command: list[str]
+    returncode: int
+    stdout: str
+    stderr: str
+    notes: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "element": self.element,
+            "value": self.value,
+            "supported": self.supported,
+            "command": self.command,
+            "returncode": self.returncode,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "notes": self.notes,
+        }
+
+
+@dataclass(slots=True)
+class BcdBootappElementProbeReport:
+    """Offline BOOTAPP create+element capability probe report."""
+
+    store_path: Path
+    bootapp_guid: str | None
+    create_supported: bool
+    element_probes: list[BcdElementSetProbe]
+    enum_output_path: Path
+    conclusion: Literal[
+        "bootapp_elements_supported",
+        "bootapp_create_only",
+        "blocked",
+        "unknown",
+    ]
+    warnings: list[str]
+    blockers: list[str]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "store_path": str(self.store_path),
+            "bootapp_guid": self.bootapp_guid,
+            "create_supported": self.create_supported,
+            "element_probes": [item.to_dict() for item in self.element_probes],
+            "enum_output_path": str(self.enum_output_path),
+            "conclusion": self.conclusion,
+            "warnings": self.warnings,
+            "blockers": self.blockers,
+        }
+
+
+@dataclass(slots=True)
 class DoctorReport:
     """Structured diagnostics used in validation reports."""
 

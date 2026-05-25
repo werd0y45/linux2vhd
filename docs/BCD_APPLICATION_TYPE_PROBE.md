@@ -24,6 +24,19 @@ Base matrix:
 
 Implementation also inspects `bcdedit /? create` output and may probe extra known tokens if present.
 
+## Windows VM result snapshot
+
+Observed in offline store `C:\LVHLab\bcd_probe\bcd_probe.bcd`:
+
+- supported: `osloader`, `bootsector`, `bootapp`, `resume`, `startup`
+- invalid/rejected: `ntldr`, `memdiag`
+- sample created BOOTAPP GUID: `{4172ed59-57cf-11f1-b3c6-0800274f9ff7}`
+
+Important:
+
+- BOOTAPP creation success in offline store confirms parser acceptance only.
+- It does not prove that firmware/bootmgr will boot the entry.
+
 ## Safety boundary
 
 Probe does:

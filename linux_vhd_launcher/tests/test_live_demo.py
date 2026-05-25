@@ -762,18 +762,26 @@ def test_firmware_efi_bootapp_probe_requires_probe_report(tmp_path: Path) -> Non
     req.report_dir.mkdir(parents=True, exist_ok=True)
     out = strategy.register(req)
     assert out.status == "registration_blocked"
-    assert "probe-application-types" in (out.blockers[0] if out.blockers else "")
+    assert "probe-bootapp-elements" in (out.blockers[0] if out.blockers else "")
 
 
 def test_firmware_efi_bootapp_probe_dry_run_plan(tmp_path: Path) -> None:
     strategy = choose_registration_strategy("firmware-efi-bootapp-probe")
     report_dir = tmp_path / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / "bcd_application_type_probe.json").write_text(
+    (report_dir / "bcd_bootapp_elements_probe.json").write_text(
         json.dumps(
             {
                 "report": {
-                    "supported_types": ["osloader", "bootapp"],
+                    "create_supported": True,
+                    "element_probes": [
+                        {"element": "device", "value": "partition=C:", "supported": True},
+                        {
+                            "element": "path",
+                            "value": "\\EFI\\LinuxVHDLauncher\\ubuntu-live\\BOOTX64.EFI",
+                            "supported": True,
+                        },
+                    ],
                 }
             }
         ),
@@ -811,6 +819,46 @@ def test_firmware_efi_bootapp_probe_dry_run_plan(tmp_path: Path) -> None:
     out_real = strategy.register(req_real)
     assert out_real.status == "registration_blocked"
     assert any("real mode remains blocked" in blocker for blocker in out_real.blockers)
+
+
+def test_firmware_efi_bootapp_system_dry_run_strategy_available(tmp_path: Path) -> None:
+    strategy = choose_registration_strategy("firmware-efi-bootapp-system-dry-run")
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "bcd_bootapp_elements_probe.json").write_text(
+        json.dumps(
+            {
+                "report": {
+                    "create_supported": True,
+                    "element_probes": [
+                        {"element": "device", "value": "partition=C:", "supported": True},
+                        {
+                            "element": "path",
+                            "value": "\\EFI\\LinuxVHDLauncher\\ubuntu-live\\BOOTX64.EFI",
+                            "supported": True,
+                        },
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=tmp_path / "x.vhdx",
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=tmp_path,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+    )
+    out = strategy.register(req)
+    assert out.status == "planned"
+    assert ["bcdedit", "/set", "{GUID}", "device", "partition=S:"] in out.planned_commands
 
 
 def test_docs_bcd_registration_mentions_known_failed_analysis() -> None:

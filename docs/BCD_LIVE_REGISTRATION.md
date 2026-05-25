@@ -10,7 +10,7 @@ Boot registration is separated from payload build.
 - `bootmgr`: experimental BCDEdit mutation path.
 - `bootmgr-experimental-vhd`: explicit unsafe-gated BCD VHD experiment for disposable VM snapshot.
 - `firmware-efi-staged`: ESP staging-oriented strategy; currently plan-first and real mode blocked pending documented firmware-entry validation.
-- `firmware-efi-bootapp-probe`: dry-run strategy that activates only after offline probe report confirms `bootapp` parser support.
+- `firmware-efi-bootapp-system-dry-run`: dry-run strategy that activates only after offline probe confirms BOOTAPP `create` + `device` + `path` acceptance.
 
 ## Known Failure Evidence (Windows 10 VM)
 
@@ -75,16 +75,25 @@ As a result, strategy is marked known-failed with id:
 - Does not mutate `{bootmgr}` path or default entry.
 - Does not claim bootability.
 
-## Offline application-type capability probe
+## Offline BOOTAPP probes
 
 - Command:
   - `demo bcd probe-application-types --lab-dir <lab> --report-dir <reports> --json`
+- Command:
+  - `demo bcd probe-bootapp-elements --lab-dir <lab> --report-dir <reports> --json`
+- Analyzer:
+  - `demo bcd analyze-bootapp-probe --probe-report <reports>\\bcd_bootapp_elements_probe.json --json`
 - Uses offline store only:
   - `bcdedit /createstore <lab>\\bcd_probe\\bcd_probe.bcd`
   - `bcdedit /store <probe-store> /create ... /application osloader|bootsector|bootapp`
   - `bcdedit /store <probe-store> /enum all /v`
-- Probe result informs whether `firmware-efi-bootapp-probe` can generate an extended dry-run plan.
-- Even if `bootapp` is accepted, runtime Linux EFI boot remains **не подтверждено**.
+- Uses separate offline store for BOOTAPP element set probes:
+  - `bcdedit /store <probe-store> /create ... /application bootapp`
+  - `bcdedit /store <probe-store> /set {GUID} device partition=C:`
+  - `bcdedit /store <probe-store> /set {GUID} path \EFI\LinuxVHDLauncher\ubuntu-live\BOOTX64.EFI`
+  - `bcdedit /store <probe-store> /enum all /v`
+- Probe result informs whether `firmware-efi-bootapp-system-dry-run` can generate an extended dry-run plan.
+- Even if `device/path` are accepted offline, runtime Linux EFI boot remains **не подтверждено**.
 
 ## Artifacts
 
