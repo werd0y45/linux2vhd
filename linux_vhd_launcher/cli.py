@@ -48,6 +48,7 @@ from linux_vhd_launcher.models import (
     VhdSpec,
     VmRunnerConfig,
 )
+from linux_vhd_launcher.services.bcd_probe import probe_bcd_application_types
 from linux_vhd_launcher.services.boot_manager import BootManager, RegistryUpdater
 from linux_vhd_launcher.services.installer_service import (
     FakeDeploymentBackend,
@@ -322,6 +323,16 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_inspect.add_argument("--iso", type=Path, required=True)
     demo_inspect.add_argument("--json", action="store_true")
 
+    demo_bcd = demo_sub.add_parser("bcd", help="Offline BCD capability probes")
+    demo_bcd_sub = demo_bcd.add_subparsers(dest="demo_bcd_command", required=True)
+    demo_bcd_probe = demo_bcd_sub.add_parser(
+        "probe-application-types",
+        help="Probe BCDEdit /application types in offline BCD store only",
+    )
+    demo_bcd_probe.add_argument("--lab-dir", type=Path, required=True)
+    demo_bcd_probe.add_argument("--report-dir", type=Path, required=True)
+    demo_bcd_probe.add_argument("--json", action="store_true")
+
     demo_live = demo_sub.add_parser("live", help="Live VHD payload demo operations")
     demo_live_sub = demo_live.add_subparsers(dest="demo_live_command", required=True)
 
@@ -358,6 +369,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "bootmgr-experimental-vhd",
             "firmware",
             "firmware-efi-staged",
+            "firmware-efi-bootapp-probe",
             "blocked",
         ],
         default="auto",
@@ -388,6 +400,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "bootmgr-experimental-vhd",
             "firmware",
             "firmware-efi-staged",
+            "firmware-efi-bootapp-probe",
             "blocked",
         ],
         default="auto",
@@ -1494,6 +1507,27 @@ def _run_demo_command(args: argparse.Namespace) -> int:
     if args.demo_command == "inspect-iso":
         result = demo_inspect_iso(iso_path=Path(args.iso))
         _print_demo_result(result, as_json=as_json)
+        return 0
+
+    if args.demo_command == "bcd":
+        if args.demo_bcd_command != "probe-application-types":
+            raise ValidationReportFormatError(
+                f"Unsupported demo bcd command: {args.demo_bcd_command}"
+            )
+        outcome = probe_bcd_application_types(
+            lab_dir=Path(args.lab_dir),
+            report_dir=Path(args.report_dir),
+        )
+        payload = outcome.to_dict()
+        if as_json:
+            print(json.dumps(payload, indent=2))
+        else:
+            supported = ", ".join(outcome.report.supported_types) or "<none>"
+            print("status: planned")
+            print(f"store_path: {outcome.report.store_path}")
+            print(f"supported_types: {supported}")
+            if outcome.report.blocked_reason:
+                print(f"blocked_reason: {outcome.report.blocked_reason}")
         return 0
 
     if args.demo_command != "live":

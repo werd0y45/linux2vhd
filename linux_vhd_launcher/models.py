@@ -263,6 +263,52 @@ class EspStagingPlan:
 
 
 @dataclass(slots=True)
+class BcdApplicationTypeProbe:
+    """Single offline BCD application-type probe command result."""
+
+    application_type: str
+    supported: bool
+    guid: str | None
+    command: list[str]
+    returncode: int
+    stdout: str
+    stderr: str
+    notes: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "application_type": self.application_type,
+            "supported": self.supported,
+            "guid": self.guid,
+            "command": self.command,
+            "returncode": self.returncode,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "notes": self.notes,
+        }
+
+
+@dataclass(slots=True)
+class BcdProbeReport:
+    """Offline BCD capability probe report."""
+
+    store_path: Path
+    probes: list[BcdApplicationTypeProbe]
+    enum_output_path: Path
+    supported_types: list[str]
+    blocked_reason: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "store_path": str(self.store_path),
+            "probes": [item.to_dict() for item in self.probes],
+            "enum_output_path": str(self.enum_output_path),
+            "supported_types": self.supported_types,
+            "blocked_reason": self.blocked_reason,
+        }
+
+
+@dataclass(slots=True)
 class DoctorReport:
     """Structured diagnostics used in validation reports."""
 

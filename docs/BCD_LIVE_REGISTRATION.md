@@ -10,6 +10,7 @@ Boot registration is separated from payload build.
 - `bootmgr`: experimental BCDEdit mutation path.
 - `bootmgr-experimental-vhd`: explicit unsafe-gated BCD VHD experiment for disposable VM snapshot.
 - `firmware-efi-staged`: ESP staging-oriented strategy; currently plan-first and real mode blocked pending documented firmware-entry validation.
+- `firmware-efi-bootapp-probe`: dry-run strategy that activates only after offline probe report confirms `bootapp` parser support.
 
 ## Known Failure Evidence (Windows 10 VM)
 
@@ -73,6 +74,17 @@ As a result, strategy is marked known-failed with id:
   - unmount ESP (`mountvol S: /d`).
 - Does not mutate `{bootmgr}` path or default entry.
 - Does not claim bootability.
+
+## Offline application-type capability probe
+
+- Command:
+  - `demo bcd probe-application-types --lab-dir <lab> --report-dir <reports> --json`
+- Uses offline store only:
+  - `bcdedit /createstore <lab>\\bcd_probe\\bcd_probe.bcd`
+  - `bcdedit /store <probe-store> /create ... /application osloader|bootsector|bootapp`
+  - `bcdedit /store <probe-store> /enum all /v`
+- Probe result informs whether `firmware-efi-bootapp-probe` can generate an extended dry-run plan.
+- Even if `bootapp` is accepted, runtime Linux EFI boot remains **не подтверждено**.
 
 ## Artifacts
 

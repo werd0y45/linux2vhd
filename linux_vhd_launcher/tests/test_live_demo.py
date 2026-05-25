@@ -744,6 +744,75 @@ def test_firmware_efi_staged_strategy_dry_run_only(tmp_path: Path) -> None:
     assert any("real mode remains blocked" in blocker for blocker in out_real_flags.blockers)
 
 
+def test_firmware_efi_bootapp_probe_requires_probe_report(tmp_path: Path) -> None:
+    strategy = choose_registration_strategy("firmware-efi-bootapp-probe")
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=tmp_path / "x.vhdx",
+            size_gb=12,
+        ),
+        report_dir=tmp_path / "reports",
+        lab_dir=tmp_path,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+    )
+    req.report_dir.mkdir(parents=True, exist_ok=True)
+    out = strategy.register(req)
+    assert out.status == "registration_blocked"
+    assert "probe-application-types" in (out.blockers[0] if out.blockers else "")
+
+
+def test_firmware_efi_bootapp_probe_dry_run_plan(tmp_path: Path) -> None:
+    strategy = choose_registration_strategy("firmware-efi-bootapp-probe")
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "bcd_application_type_probe.json").write_text(
+        json.dumps(
+            {
+                "report": {
+                    "supported_types": ["osloader", "bootapp"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=tmp_path / "x.vhdx",
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=tmp_path,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+    )
+    out = strategy.register(req)
+    assert out.status == "planned"
+    assert out.planned_commands
+    assert any("/application" in " ".join(command) and "bootapp" in " ".join(command) for command in out.planned_commands)
+    assert all("/copy {current}" not in " ".join(command) for command in out.planned_commands)
+    assert all("{bootmgr}" not in " ".join(command) for command in out.planned_commands)
+
+    req_real = LiveRegistrationRequest(
+        layout=req.layout,
+        report_dir=req.report_dir,
+        lab_dir=req.lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=True,
+        confirmation_token=True,
+        confirm_vm_snapshot=True,
+    )
+    out_real = strategy.register(req_real)
+    assert out_real.status == "registration_blocked"
+    assert any("real mode remains blocked" in blocker for blocker in out_real.blockers)
+
+
 def test_docs_bcd_registration_mentions_known_failed_analysis() -> None:
     content = Path("docs/BCD_LIVE_REGISTRATION.md").read_text(encoding="utf-8")
     assert "known-failed" in content.lower() or "known failed" in content.lower()

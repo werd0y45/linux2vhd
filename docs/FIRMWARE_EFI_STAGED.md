@@ -37,6 +37,13 @@ Interpretation:
 - `bcdedit /displayorder`
 - `bcdedit /delete`
 - `mountvol /s` and `mountvol /d`
+- offline capability probe: `bcdedit /createstore`, `bcdedit /store <probe> /create`, `bcdedit /store <probe> /enum all /v`
+
+## Probe dependency
+
+- Run `demo bcd probe-application-types` first.
+- If offline report contains `bootapp` in `supported_types`, project enables dry-run strategy `firmware-efi-bootapp-probe`.
+- If `bootapp` is absent or rejected, `firmware-efi-staged` stays blocked for real mode and docs status remains: `BCD generic EFI chain remains unconfirmed`.
 
 ## What remains unverified until reboot test
 

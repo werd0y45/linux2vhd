@@ -236,6 +236,120 @@ class FirmwareEfiStagedDryRunStrategy:
 
 
 @dataclass(slots=True)
+class FirmwareEfiBootappProbeStrategy:
+    """Dry-run strategy that depends on offline bootapp capability probe report."""
+
+    name: str = "firmware-efi-bootapp-probe"
+
+    def register(self, request: LiveRegistrationRequest) -> LiveRegistrationOutcome:
+        probe_report_path = request.report_dir / "bcd_application_type_probe.json"
+        if not probe_report_path.exists():
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "Missing BCD application-type probe report. "
+                    "Run demo bcd probe-application-types first."
+                ],
+                warnings=["No ESP/BCD mutation executed."],
+            )
+
+        payload = json.loads(probe_report_path.read_text(encoding="utf-8"))
+        report_raw = payload.get("report")
+        supported_types_raw = (
+            report_raw.get("supported_types", []) if isinstance(report_raw, dict) else []
+        )
+        supported_types = {
+            str(item).strip().lower() for item in supported_types_raw if str(item).strip()
+        }
+        if "bootapp" not in supported_types:
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "Offline probe did not confirm bootapp support. "
+                    "BCD generic EFI chain remains unconfirmed."
+                ],
+                warnings=["No ESP/BCD mutation executed."],
+            )
+
+        staged_dir = "\\EFI\\LinuxVHDLauncher\\ubuntu-live\\"
+        esp_plan = EspStagingPlan(
+            esp_mount_letter="S",
+            staged_dir=staged_dir,
+            files=[
+                StagedEfiFile(
+                    source=f"{request.layout.vhd_path}::/EFI/BOOT/BOOTX64.EFI",
+                    destination=f"{staged_dir}BOOTX64.EFI",
+                    sha256=None,
+                    required=True,
+                ),
+                StagedEfiFile(
+                    source=f"{request.layout.vhd_path}::/EFI/BOOT/grubx64.efi",
+                    destination=f"{staged_dir}grubx64.efi",
+                    sha256=None,
+                    required=True,
+                ),
+                StagedEfiFile(
+                    source=f"{request.layout.vhd_path}::/EFI/BOOT/grub.cfg",
+                    destination=f"{staged_dir}grub.cfg",
+                    sha256=None,
+                    required=True,
+                ),
+            ],
+            requires_esp_write=True,
+            secure_boot_warning=(
+                "Secure Boot behavior for this staged Linux path is unverified."
+            ),
+            rollback_steps=[
+                "bcdedit /delete {GUID} /f (if entry created)",
+                "mountvol S: /s",
+                "Remove-Item -Recurse -Force S:\\EFI\\LinuxVHDLauncher\\ubuntu-live",
+                "mountvol S: /d",
+            ],
+            blockers=[
+                "bootapp creation support in offline store does not prove runtime boot success.",
+                "Firmware/BCD chain to Linux EFI remains unverified until reboot evidence.",
+            ],
+        )
+        planned = [
+            ["mountvol", "S:", "/s"],
+            ["copy", "<vhd-efi>\\BOOTX64.EFI", "S:\\EFI\\LinuxVHDLauncher\\ubuntu-live\\BOOTX64.EFI"],
+            ["copy", "<vhd-efi>\\grubx64.efi", "S:\\EFI\\LinuxVHDLauncher\\ubuntu-live\\grubx64.efi"],
+            ["copy", "<vhd-efi>\\grub.cfg", "S:\\EFI\\LinuxVHDLauncher\\ubuntu-live\\grub.cfg"],
+            ["bcdedit", "/create", "/d", "LinuxVHDLauncher Firmware EFI BOOTAPP EXPERIMENT", "/application", "bootapp"],
+            ["bcdedit", "/set", "{GUID}", "path", "\\EFI\\LinuxVHDLauncher\\ubuntu-live\\BOOTX64.EFI"],
+            ["bcdedit", "/displayorder", "{GUID}", "/addlast"],
+            ["mountvol", "S:", "/d"],
+        ]
+        if not request.dry_run:
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "firmware-efi-bootapp-probe real mode remains blocked. "
+                    "Use dry-run planning and separate VM reboot experiment protocol."
+                ],
+                warnings=["No ESP/BCD mutation executed."],
+                planned_commands=planned,
+                esp_staging_plan=esp_plan,
+            )
+        return LiveRegistrationOutcome(
+            strategy=self.name,
+            status="planned",
+            warnings=[
+                "bootapp support detected in offline probe report.",
+                "Dry-run only. Bootability remains unverified until reboot test.",
+            ],
+            blockers=[
+                "BCD generic EFI chain remains unconfirmed.",
+            ],
+            planned_commands=planned,
+            esp_staging_plan=esp_plan,
+        )
+
+
+@dataclass(slots=True)
 class BcdBootMgrStrategy:
     """Experimental BCDEdit-based registration strategy."""
 
@@ -424,6 +538,8 @@ def choose_registration_strategy(
         )
     if value == "firmware-efi-staged":
         return FirmwareEfiStagedDryRunStrategy()
+    if value == "firmware-efi-bootapp-probe":
+        return FirmwareEfiBootappProbeStrategy()
     if value == "auto":
         return BlockedUnsupportedStrategy(
             reason=(
