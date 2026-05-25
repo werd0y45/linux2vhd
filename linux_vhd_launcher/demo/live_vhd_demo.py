@@ -50,6 +50,7 @@ class DemoContext:
     allow_esp_write: bool = False
     allow_firmware_entry: bool = False
     allow_secure_boot_experiment: bool = False
+    allow_unprobed_bootapp_vhd: bool = False
 
 
 @dataclass(slots=True)
@@ -203,6 +204,7 @@ def register_live(
             allow_esp_write=context.allow_esp_write,
             allow_firmware_entry=context.allow_firmware_entry,
             allow_secure_boot_experiment=context.allow_secure_boot_experiment,
+            allow_unprobed_bootapp_vhd=context.allow_unprobed_bootapp_vhd,
         )
     )
 
@@ -314,6 +316,7 @@ def stage_esp_plan(
         allow_esp_write=False,
         allow_firmware_entry=False,
         allow_secure_boot_experiment=False,
+        allow_unprobed_bootapp_vhd=False,
     )
     return register_live(
         context=plan_context,

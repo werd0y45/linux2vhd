@@ -33,6 +33,7 @@ class LiveRegistrationRequest:
     allow_esp_write: bool = False
     allow_firmware_entry: bool = False
     allow_secure_boot_experiment: bool = False
+    allow_unprobed_bootapp_vhd: bool = False
 
 
 @dataclass(slots=True)
@@ -465,6 +466,162 @@ class BootappVhdSystemDryRunStrategy:
 
 
 @dataclass(slots=True)
+class BootappVhdSystemExperimentalStrategy:
+    """Real gated BOOTAPP strategy that targets VHD device directly."""
+
+    name: str = "bootapp-vhd-system-experimental"
+    runner_factory: Callable[[], CommandRunner] = CommandRunner
+
+    def register(self, request: LiveRegistrationRequest) -> LiveRegistrationOutcome:
+        report_dir = request.report_dir
+        if not report_dir.exists() or not report_dir.is_dir():
+            raise UnsafeRealOperationError("register-bcd requires existing --report-dir directory.")
+
+        baseline_before = report_dir / "bcd_baseline_before.txt"
+        baseline_before_fw = report_dir / "bcd_baseline_before_firmware.txt"
+        baseline_after = report_dir / "bcd_baseline_after.txt"
+        baseline_after_fw = report_dir / "bcd_baseline_after_firmware.txt"
+        guid_enum = report_dir / "bcd_created_guid_enum_v.txt"
+        backup_path = report_dir / "bcd_backup_live_registration.bcd"
+
+        vhd_device = _format_vhd_device(request.layout.vhd_path)
+        planned_commands = _planned_bootapp_vhd_experimental_commands(
+            backup_path=backup_path,
+            vhd_device=vhd_device,
+        )
+        rollback_actions = ["bcdedit /delete {GUID} /f"]
+
+        if request.dry_run:
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="planned",
+                warnings=["Dry-run: experimental BOOTAPP VHD commands not executed."],
+                blockers=[
+                    "Bootability is unverified until manual reboot test.",
+                ],
+                planned_commands=planned_commands,
+                rollback_actions=rollback_actions,
+            )
+
+        if not request.confirm_vm_snapshot:
+            raise UnsafeRealOperationError("register-bcd requires --confirm-vm-snapshot")
+        if not is_windows_platform():
+            raise UnsupportedPlatformError("register-bcd real mode is supported only on Windows")
+        if not is_admin():
+            raise UnsafeRealOperationError("register-bcd real mode requires administrator rights")
+
+        if not request.allow_unprobed_bootapp_vhd:
+            probe_error = _validate_bootapp_vhd_probe_report(
+                report_dir=report_dir,
+                expected_vhd_device=vhd_device,
+            )
+            if probe_error is not None:
+                return LiveRegistrationOutcome(
+                    strategy=self.name,
+                    status="registration_blocked",
+                    blockers=[probe_error],
+                    warnings=["No BCD mutation executed."],
+                    planned_commands=planned_commands,
+                )
+
+        gate = RealWindowsOpsGate(
+            execute_real_windows_ops=request.execute_real_windows_ops,
+            confirmation_token=request.confirmation_token,
+            dry_run=False,
+            backup_path=backup_path,
+            allowed_lab_dir=request.lab_dir,
+            validation_report_path=request.report_dir / "demo_report.json",
+        )
+        gate.assert_allowed(
+            operation="demo live register-bcd",
+            rollback_plan="Delete temporary BOOTAPP GUID and use bcdedit /import backup in emergency mode.",
+            report_path=request.report_dir / "demo_report.json",
+            target_path=request.layout.vhd_path,
+            require_rollback_plan=True,
+            require_report=True,
+            require_target_in_lab_dir=True,
+        )
+
+        runner = self.runner_factory()
+        outcome = LiveRegistrationOutcome(
+            strategy=self.name,
+            status="registration_experimental_done",
+            backup_path=backup_path,
+            planned_commands=planned_commands,
+            warnings=[
+                "Experimental BOOTAPP VHD entry created. Bootability remains unverified until manual reboot test.",
+                "No {bootmgr} path/default mutation performed by this strategy.",
+            ],
+        )
+
+        guid: str | None = None
+        try:
+            enum_before = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "all", "/v"])
+            baseline_before.write_text(enum_before.stdout, encoding="utf-8")
+
+            enum_before_firmware = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "firmware"])
+            baseline_before_fw.write_text(enum_before_firmware.stdout, encoding="utf-8")
+
+            _run_and_collect(runner, outcome, ["bcdedit", "/export", str(backup_path)])
+
+            create_cmd = _run_and_collect(
+                runner,
+                outcome,
+                [
+                    "bcdedit",
+                    "/create",
+                    "/d",
+                    "LinuxVHDLauncher Ubuntu Live BOOTAPP VHD EXPERIMENT",
+                    "/application",
+                    "bootapp",
+                ],
+            )
+            guid = _extract_guid(create_cmd.stdout)
+            outcome.created_guid = guid
+
+            _run_and_collect(runner, outcome, ["bcdedit", "/set", guid, "device", vhd_device])
+            _run_and_collect(runner, outcome, ["bcdedit", "/set", guid, "path", "\\EFI\\BOOT\\BOOTX64.EFI"])
+            _run_and_collect(runner, outcome, ["bcdedit", "/displayorder", guid, "/addlast"])
+
+            guid_result = _run_and_collect(runner, outcome, ["bcdedit", "/enum", guid, "/v"])
+            guid_enum.write_text(guid_result.stdout, encoding="utf-8")
+
+            enum_after = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "all", "/v"])
+            baseline_after.write_text(enum_after.stdout, encoding="utf-8")
+
+            enum_after_firmware = _run_and_collect(runner, outcome, ["bcdedit", "/enum", "firmware"])
+            baseline_after_fw.write_text(enum_after_firmware.stdout, encoding="utf-8")
+        except Exception as exc:
+            if guid is not None:
+                delete_result = runner.run(
+                    ["bcdedit", "/delete", guid, "/f"],
+                    elevated_required=True,
+                    check=False,
+                )
+                outcome.executed_commands.append(delete_result)
+                outcome.rollback_actions.append(f"bcdedit /delete {guid} /f")
+            outcome.status = "registration_failed"
+            outcome.blockers.append(str(exc))
+            outcome.warnings.append("Original command failure preserved in blockers/executed command evidence.")
+            return outcome
+
+        outcome.unregister_command = ["bcdedit", "/delete", guid, "/f"] if guid is not None else None
+        outcome.rollback_actions.append("bcdedit /delete {GUID} /f")
+        manifest = {
+            "strategy": self.name,
+            "guid": outcome.created_guid,
+            "backup": str(backup_path),
+            "vhd": str(request.layout.vhd_path),
+            "unregister_command": outcome.unregister_command,
+        }
+        (request.report_dir / "live_registration_manifest.json").write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return outcome
+
+
+@dataclass(slots=True)
 class BcdBootMgrStrategy:
     """Experimental BCDEdit-based registration strategy."""
 
@@ -657,6 +814,8 @@ def choose_registration_strategy(
         return FirmwareEfiBootappSystemDryRunStrategy()
     if value == "bootapp-vhd-system-dry-run":
         return BootappVhdSystemDryRunStrategy()
+    if value == "bootapp-vhd-system-experimental":
+        return BootappVhdSystemExperimentalStrategy()
     if value == "firmware-efi-bootapp-probe":
         return FirmwareEfiBootappSystemDryRunStrategy(
             name="firmware-efi-bootapp-probe"
@@ -719,6 +878,68 @@ def _planned_experimental_commands(
         ["bcdedit", "/enum", "all"],
         ["bcdedit", "/enum", "firmware"],
     ]
+
+
+def _planned_bootapp_vhd_experimental_commands(
+    *,
+    backup_path: Path,
+    vhd_device: str,
+) -> list[list[str]]:
+    return [
+        ["bcdedit", "/enum", "all", "/v"],
+        ["bcdedit", "/enum", "firmware"],
+        ["bcdedit", "/export", str(backup_path)],
+        [
+            "bcdedit",
+            "/create",
+            "/d",
+            "LinuxVHDLauncher Ubuntu Live BOOTAPP VHD EXPERIMENT",
+            "/application",
+            "bootapp",
+        ],
+        ["bcdedit", "/set", "{GUID}", "device", vhd_device],
+        ["bcdedit", "/set", "{GUID}", "path", "\\EFI\\BOOT\\BOOTX64.EFI"],
+        ["bcdedit", "/displayorder", "{GUID}", "/addlast"],
+        ["bcdedit", "/enum", "{GUID}", "/v"],
+        ["bcdedit", "/enum", "all", "/v"],
+        ["bcdedit", "/enum", "firmware"],
+    ]
+
+
+def _validate_bootapp_vhd_probe_report(*, report_dir: Path, expected_vhd_device: str) -> str | None:
+    probe_path = report_dir / "bcd_bootapp_vhd_device_probe.json"
+    if not probe_path.exists():
+        return (
+            "Missing BOOTAPP VHD probe report. Run demo bcd probe-bootapp-vhd-device first "
+            "or pass --allow-unprobed-bootapp-vhd."
+        )
+
+    payload = json.loads(probe_path.read_text(encoding="utf-8"))
+    report_raw = payload.get("report", {})
+    if not isinstance(report_raw, dict):
+        return "Invalid BOOTAPP VHD probe report format."
+
+    conclusion = str(report_raw.get("conclusion", "")).strip().lower()
+    if conclusion != "bootapp_vhd_device_supported":
+        return (
+            "BOOTAPP VHD probe conclusion is not bootapp_vhd_device_supported. "
+            "Refusing real mutation by default."
+        )
+
+    element_probes = report_raw.get("element_probes", [])
+    device_ok = _probe_element_supported(
+        element_probes=element_probes,
+        element="device",
+        value=expected_vhd_device,
+    )
+    path_ok = _probe_element_supported(
+        element_probes=element_probes,
+        element="path",
+        value="\\EFI\\BOOT\\BOOTX64.EFI",
+    )
+    if not device_ok or not path_ok:
+        return "BOOTAPP VHD probe report does not confirm required device/path elements."
+    return None
 
 
 def _probe_element_supported(

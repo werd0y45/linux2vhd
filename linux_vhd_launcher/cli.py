@@ -405,6 +405,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "firmware-efi-bootapp-probe",
             "firmware-efi-bootapp-system-dry-run",
             "bootapp-vhd-system-dry-run",
+            "bootapp-vhd-system-experimental",
             "blocked",
         ],
         default="auto",
@@ -416,6 +417,7 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_register.add_argument("--allow-esp-write", action="store_true")
     demo_live_register.add_argument("--allow-firmware-entry", action="store_true")
     demo_live_register.add_argument("--allow-secure-boot-experiment", action="store_true")
+    demo_live_register.add_argument("--allow-unprobed-bootapp-vhd", action="store_true")
     demo_live_register.add_argument("--no-dry-run", action="store_true")
     demo_live_register.add_argument("--json", action="store_true")
 
@@ -438,6 +440,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "firmware-efi-bootapp-probe",
             "firmware-efi-bootapp-system-dry-run",
             "bootapp-vhd-system-dry-run",
+            "bootapp-vhd-system-experimental",
             "blocked",
         ],
         default="auto",
@@ -449,6 +452,7 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_live_install.add_argument("--allow-esp-write", action="store_true")
     demo_live_install.add_argument("--allow-firmware-entry", action="store_true")
     demo_live_install.add_argument("--allow-secure-boot-experiment", action="store_true")
+    demo_live_install.add_argument("--allow-unprobed-bootapp-vhd", action="store_true")
     demo_live_install.add_argument("--no-dry-run", action="store_true")
     demo_live_install.add_argument("--json", action="store_true")
 
@@ -1492,6 +1496,7 @@ def _demo_context_from_args(args: argparse.Namespace) -> DemoContext:
         allow_esp_write=bool(getattr(args, "allow_esp_write", False)),
         allow_firmware_entry=bool(getattr(args, "allow_firmware_entry", False)),
         allow_secure_boot_experiment=bool(getattr(args, "allow_secure_boot_experiment", False)),
+        allow_unprobed_bootapp_vhd=bool(getattr(args, "allow_unprobed_bootapp_vhd", False)),
     )
 
 

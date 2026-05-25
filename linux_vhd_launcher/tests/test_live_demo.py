@@ -940,6 +940,219 @@ def test_bootapp_vhd_system_dry_run_plan_and_blocked_real(tmp_path: Path) -> Non
     assert any("real mode remains blocked" in blocker for blocker in out_real.blockers)
 
 
+def test_bootapp_vhd_system_experimental_real_refuses_without_probe_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = choose_registration_strategy("bootapp-vhd-system-experimental")
+    report_dir = tmp_path / "reports"
+    lab_dir = tmp_path / "lab"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    lab_dir.mkdir(parents=True, exist_ok=True)
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=Path("C:/LVHLab/ubuntu-live.vhdx"),
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=True,
+        confirmation_token=True,
+        confirm_vm_snapshot=True,
+    )
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: True)
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: True)
+    out = strategy.register(req)
+    assert out.status == "registration_blocked"
+    assert "probe-bootapp-vhd-device" in (out.blockers[0] if out.blockers else "")
+
+
+def test_bootapp_vhd_system_experimental_refuses_without_unsafe_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = choose_registration_strategy("bootapp-vhd-system-experimental")
+    report_dir = tmp_path / "reports"
+    lab_dir = tmp_path / "lab"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    lab_dir.mkdir(parents=True, exist_ok=True)
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=Path("C:/LVHLab/ubuntu-live.vhdx"),
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=True,
+        allow_unprobed_bootapp_vhd=True,
+    )
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: True)
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: True)
+    with pytest.raises(UnsafeRealOperationError):
+        strategy.register(req)
+
+
+def test_bootapp_vhd_system_experimental_real_records_commands_with_fake_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = tmp_path / "reports"
+    lab_dir = tmp_path / "lab"
+    report_dir.mkdir()
+    lab_dir.mkdir()
+    (report_dir / "bcd_bootapp_vhd_device_probe.json").write_text(
+        json.dumps(
+            {
+                "report": {
+                    "conclusion": "bootapp_vhd_device_supported",
+                    "element_probes": [
+                        {"element": "device", "value": "vhd=[C:]\\LVHLab\\ubuntu-live.vhdx", "supported": True},
+                        {"element": "path", "value": "\\EFI\\BOOT\\BOOTX64.EFI", "supported": True},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeRunner:
+        def __init__(self) -> None:
+            self.commands: list[list[str]] = []
+
+        def run(
+            self,
+            command: list[str],
+            *,
+            elevated_required: bool = False,
+            check: bool = True,
+        ):
+            del elevated_required
+            del check
+            self.commands.append(command)
+            stdout = "ok"
+            if command[:2] == ["bcdedit", "/create"]:
+                stdout = "The entry was successfully created {77777777-7777-7777-7777-777777777777}."
+            from linux_vhd_launcher.system.runner import CommandResult
+
+            return CommandResult(command=tuple(command), returncode=0, stdout=stdout, stderr="")
+
+    fake_runner = FakeRunner()
+    strategy = choose_registration_strategy("bootapp-vhd-system-experimental")
+    strategy.runner_factory = lambda: fake_runner  # type: ignore[attr-defined]
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=Path("C:/LVHLab/ubuntu-live.vhdx"),
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=True,
+        confirmation_token=True,
+        confirm_vm_snapshot=True,
+    )
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: True)
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: True)
+    monkeypatch.setattr(
+        "linux_vhd_launcher.services.live_boot_registration.RealWindowsOpsGate.assert_allowed",
+        lambda self, **kwargs: None,
+    )
+    out = strategy.register(req)
+    assert out.status == "registration_experimental_done"
+    assert out.created_guid == "{77777777-7777-7777-7777-777777777777}"
+    assert out.unregister_command == ["bcdedit", "/delete", out.created_guid, "/f"]
+    recorded = [" ".join(item.command) for item in out.executed_commands]
+    assert any("bcdedit /create /d LinuxVHDLauncher Ubuntu Live BOOTAPP VHD EXPERIMENT /application bootapp" in c for c in recorded)
+    assert any("bcdedit /displayorder {77777777-7777-7777-7777-777777777777} /addlast" in c for c in recorded)
+    assert all("/copy {current}" not in c for c in recorded)
+    assert all("{bootmgr}" not in c for c in recorded)
+    assert all(" osdevice " not in c for c in recorded)
+    assert all(" systemroot " not in c for c in recorded)
+    assert all(" default " not in c for c in recorded)
+
+
+def test_bootapp_vhd_system_experimental_failure_after_create_rolls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = tmp_path / "reports"
+    lab_dir = tmp_path / "lab"
+    report_dir.mkdir()
+    lab_dir.mkdir()
+    (report_dir / "bcd_bootapp_vhd_device_probe.json").write_text(
+        json.dumps(
+            {
+                "report": {
+                    "conclusion": "bootapp_vhd_device_supported",
+                    "element_probes": [
+                        {"element": "device", "value": "vhd=[C:]\\LVHLab\\ubuntu-live.vhdx", "supported": True},
+                        {"element": "path", "value": "\\EFI\\BOOT\\BOOTX64.EFI", "supported": True},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeRunner:
+        def run(
+            self,
+            command: list[str],
+            *,
+            elevated_required: bool = False,
+            check: bool = True,
+        ):
+            del elevated_required
+            del check
+            from linux_vhd_launcher.system.runner import CommandResult
+
+            if command[:2] == ["bcdedit", "/create"]:
+                return CommandResult(
+                    command=tuple(command),
+                    returncode=0,
+                    stdout="created {88888888-8888-8888-8888-888888888888}",
+                    stderr="",
+                )
+            if command[:4] == ["bcdedit", "/set", "{88888888-8888-8888-8888-888888888888}", "path"]:
+                return CommandResult(command=tuple(command), returncode=1, stdout="", stderr="set failed")
+            return CommandResult(command=tuple(command), returncode=0, stdout="ok", stderr="")
+
+    strategy = choose_registration_strategy("bootapp-vhd-system-experimental")
+    strategy.runner_factory = lambda: FakeRunner()  # type: ignore[attr-defined]
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=Path("C:/LVHLab/ubuntu-live.vhdx"),
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=True,
+        confirmation_token=True,
+        confirm_vm_snapshot=True,
+    )
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_windows_platform", lambda: True)
+    monkeypatch.setattr("linux_vhd_launcher.services.live_boot_registration.is_admin", lambda: True)
+    monkeypatch.setattr(
+        "linux_vhd_launcher.services.live_boot_registration.RealWindowsOpsGate.assert_allowed",
+        lambda self, **kwargs: None,
+    )
+    out: LiveRegistrationOutcome = strategy.register(req)
+    assert out.status == "registration_failed"
+    assert any(
+        "bcdedit /delete {88888888-8888-8888-8888-888888888888} /f"
+        == " ".join(item.command)
+        for item in out.executed_commands
+    )
+    assert out.rollback_actions == ["bcdedit /delete {88888888-8888-8888-8888-888888888888} /f"]
+
+
 def test_docs_bcd_registration_mentions_known_failed_analysis() -> None:
     content = Path("docs/BCD_LIVE_REGISTRATION.md").read_text(encoding="utf-8")
     assert "known-failed" in content.lower() or "known failed" in content.lower()

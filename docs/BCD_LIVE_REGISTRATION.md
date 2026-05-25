@@ -12,6 +12,7 @@ Boot registration is separated from payload build.
 - `firmware-efi-staged`: ESP staging-oriented strategy; currently plan-first and real mode blocked pending documented firmware-entry validation.
 - `firmware-efi-bootapp-system-dry-run`: dry-run strategy that activates only after offline probe confirms BOOTAPP `create` + `device` + `path` acceptance.
 - `bootapp-vhd-system-dry-run`: dry-run strategy that activates only after offline probe confirms BOOTAPP `device vhd=[...]` + `path \EFI\BOOT\BOOTX64.EFI` acceptance.
+- `bootapp-vhd-system-experimental`: real unsafe-gated strategy that creates a brand new BOOTAPP entry and points it to VHDX device without using copied Windows loader.
 
 ## Known Failure Evidence (Windows 10 VM)
 
@@ -32,6 +33,11 @@ As a result, strategy is marked known-failed with id:
 
 - `copied-current-osloader-vhd`
 
+New contrast:
+
+- `bootapp-vhd-system-experimental` does not use `/copy {current}` and does not set `osdevice/systemroot/recoverysequence/resumeobject`.
+- It is still experimental: offline parser acceptance does not prove reboot bootability.
+
 ## Safety gate (required for real mutation)
 
 - Windows
@@ -40,6 +46,7 @@ As a result, strategy is marked known-failed with id:
 - `--i-understand-this-is-experimental`
 - `--confirm-vm-snapshot`
 - `--allow-known-failed-strategy` (required only for strategies marked known-failed)
+- successful `bcd_bootapp_vhd_device_probe.json` with `conclusion=bootapp_vhd_device_supported` (unless `--allow-unprobed-bootapp-vhd` is explicitly set)
 - `--no-dry-run`
 - lab/report constraints
 - BCD backup artifact path
@@ -51,6 +58,11 @@ As a result, strategy is marked known-failed with id:
 - No `displayorder` mutation except `/addlast` for the experimental GUID.
 - No automatic `bcdedit /import` restore (emergency only, manual mode).
 - No Secure Boot setting changes.
+- For BOOTAPP VHD strategy, no use of:
+  - `osdevice`
+  - `systemroot`
+  - `recoverysequence`
+  - `resumeobject`
 
 ## Experimental command family
 
@@ -108,6 +120,7 @@ As a result, strategy is marked known-failed with id:
   - `bcdedit /store <probe-store> /set {GUID} path \EFI\BOOT\BOOTX64.EFI`
   - `bcdedit /store <probe-store> /enum all /v`
 - Probe result informs whether `bootapp-vhd-system-dry-run` can generate dry-run system-mutation plan.
+- Probe result is also a hard gate for `bootapp-vhd-system-experimental` by default.
 - Offline acceptance still does not prove bootability.
 
 ## Artifacts
@@ -141,3 +154,11 @@ As a result, strategy is marked known-failed with id:
 ## Confirmation level
 
 Direct chain `BCD -> Linux EFI inside VHDX` is **не подтверждено**. Registration success does not imply boot success.
+
+## Manual reboot evidence
+
+After running real experimental registration, record outcome explicitly:
+
+- `demo live mark-boot-result --report-dir <reports> --result booted --notes "..."`
+- `demo live mark-boot-result --report-dir <reports> --result failed --notes "..."`
+- `demo live mark-boot-result --report-dir <reports> --result not-tested --notes "..."`
