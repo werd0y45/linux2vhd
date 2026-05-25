@@ -10,6 +10,13 @@
 
 It runs only against an offline store and writes structured evidence.
 
+Related probe:
+
+- `demo bcd probe-bootapp-vhd-device` checks BOOTAPP with:
+  - `device vhd=[C:]\LVHLab\ubuntu-live.vhdx`
+  - `path \EFI\BOOT\BOOTX64.EFI`
+  in offline BCD store only.
+
 ## Safety model
 
 Probe store path:
@@ -40,6 +47,7 @@ This is safer than touching the live system store because:
 - It does not verify Windows Boot Manager runtime behavior.
 - It does not verify Secure Boot compatibility for shim/grub.
 - It does not verify Ubuntu/GRUB boot success.
+- It does not guarantee that GRUB launched from ESP can see ISO that lives inside VHDX payload.
 
 ## Important interpretation rule
 
@@ -47,3 +55,9 @@ Even when `bcdedit /set {GUID} path ...` is accepted in an offline store, this o
 
 It is not proof of bootability.
 
+## Why VHD-device probe matters
+
+- ESP-staged BOOTAPP can be valid syntactically but still fail the project goal where ISO is stored inside VHDX.
+- BOOTAPP + VHD device probe is the next closest offline experiment to project intent:
+  - BCD points to VHDX payload path
+  - BOOTAPP path points to EFI loader expected inside that payload

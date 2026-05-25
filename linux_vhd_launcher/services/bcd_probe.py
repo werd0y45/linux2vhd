@@ -12,6 +12,7 @@ from linux_vhd_launcher.errors import UnsupportedPlatformError
 from linux_vhd_launcher.models import (
     BcdApplicationTypeProbe,
     BcdBootappElementProbeReport,
+    BcdBootappVhdDeviceProbeReport,
     BcdElementSetProbe,
     BcdProbeReport,
 )
@@ -22,6 +23,8 @@ _GUID_RE = re.compile(r"\{[0-9a-fA-F\-]+\}")
 _BASE_APPLICATION_TYPES = ("osloader", "bootsector", "bootapp")
 _BOOTAPP_ELEMENTS_LABEL = "LVH Probe BOOTAPP ELEMENTS"
 _BOOTAPP_PATH_VALUE = "\\EFI\\LinuxVHDLauncher\\ubuntu-live\\BOOTX64.EFI"
+_BOOTAPP_VHD_LABEL = "LVH Probe BOOTAPP VHD"
+_BOOTAPP_VHD_PATH_VALUE = "\\EFI\\BOOT\\BOOTX64.EFI"
 
 
 @dataclass(slots=True)
@@ -45,6 +48,22 @@ class BcdBootappElementProbeOutcome:
     """Execution output with report artifact paths for bootapp element probe."""
 
     report: BcdBootappElementProbeReport
+    report_path: Path
+    enum_stderr_path: Path
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "report": self.report.to_dict(),
+            "report_path": str(self.report_path),
+            "enum_stderr_path": str(self.enum_stderr_path),
+        }
+
+
+@dataclass(slots=True)
+class BcdBootappVhdDeviceProbeOutcome:
+    """Execution output with report artifact paths for BOOTAPP+VHD probe."""
+
+    report: BcdBootappVhdDeviceProbeReport
     report_path: Path
     enum_stderr_path: Path
 
@@ -341,6 +360,170 @@ def probe_bcd_bootapp_elements(
     )
 
 
+def probe_bcd_bootapp_vhd_device(
+    *,
+    vhd_path: Path,
+    lab_dir: Path,
+    report_dir: Path,
+    runner: CommandRunner | None = None,
+) -> BcdBootappVhdDeviceProbeOutcome:
+    """Probe BOOTAPP with VHD device + EFI path in offline store only."""
+    if not is_windows_platform():
+        raise UnsupportedPlatformError(
+            "demo bcd probe-bootapp-vhd-device is supported only on Windows"
+        )
+
+    report_dir.mkdir(parents=True, exist_ok=True)
+    probe_dir = lab_dir / "bcd_probe"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+
+    store_path = probe_dir / "bootapp_vhd_device_probe.bcd"
+    enum_output_path = report_dir / "bcd_bootapp_vhd_device_enum_all_v.txt"
+    enum_stderr_path = report_dir / "bcd_bootapp_vhd_device_enum_all_v.stderr.txt"
+    report_path = report_dir / "bcd_bootapp_vhd_device_probe.json"
+
+    command_runner = runner or CommandRunner(dry_run=False)
+    warnings: list[str] = []
+    blockers: list[str] = []
+
+    createstore = command_runner.run(
+        ["bcdedit", "/createstore", str(store_path)],
+        elevated_required=False,
+        check=False,
+    )
+
+    bootapp_guid: str | None = None
+    create_supported = False
+    create_command = [
+        "bcdedit",
+        "/store",
+        str(store_path),
+        "/create",
+        "/d",
+        _BOOTAPP_VHD_LABEL,
+        "/application",
+        "bootapp",
+    ]
+    create_result = command_runner.run(create_command, elevated_required=False, check=False)
+    if createstore.returncode != 0:
+        blockers.append("Failed to create offline BCD store for BOOTAPP VHD device probe.")
+    else:
+        bootapp_guid = _extract_guid(create_result.stdout)
+        create_supported = create_result.returncode == 0 and bootapp_guid is not None
+        if create_result.returncode != 0:
+            blockers.append("Offline /create /application bootapp command was rejected.")
+        elif bootapp_guid is None:
+            blockers.append(
+                "bootapp /create command succeeded but GUID was not parsed from output."
+            )
+
+    element_probes: list[BcdElementSetProbe] = []
+    vhd_device_value = _format_vhd_device_reference(vhd_path)
+    if create_supported and bootapp_guid is not None:
+        for element, value in (
+            ("device", vhd_device_value),
+            ("path", _BOOTAPP_VHD_PATH_VALUE),
+            ("description", _BOOTAPP_VHD_LABEL),
+        ):
+            command = [
+                "bcdedit",
+                "/store",
+                str(store_path),
+                "/set",
+                bootapp_guid,
+                element,
+                value,
+            ]
+            result = command_runner.run(command, elevated_required=False, check=False)
+            element_probes.append(
+                BcdElementSetProbe(
+                    element=element,
+                    value=value,
+                    supported=result.returncode == 0,
+                    command=command,
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    notes=(
+                        None
+                        if result.returncode == 0
+                        else "Element rejected by bcdedit in offline BOOTAPP VHD probe."
+                    ),
+                )
+            )
+    else:
+        warnings.append(
+            "Skipping element /set probes because BOOTAPP entry creation was not confirmed."
+        )
+
+    warnings.append(
+        "Offline parser acceptance for `device vhd=[...]` and `path` does not prove bootability."
+    )
+
+    enum_result = command_runner.run(
+        ["bcdedit", "/store", str(store_path), "/enum", "all", "/v"],
+        elevated_required=False,
+        check=False,
+    )
+    enum_output_path.write_text(enum_result.stdout, encoding="utf-8")
+    enum_stderr_path.write_text(enum_result.stderr, encoding="utf-8")
+
+    conclusion = _bootapp_vhd_device_conclusion(
+        create_supported=create_supported,
+        element_probes=element_probes,
+        vhd_device_value=vhd_device_value,
+        blockers=blockers,
+    )
+    report = BcdBootappVhdDeviceProbeReport(
+        store_path=store_path,
+        vhd_path=vhd_path,
+        bootapp_guid=bootapp_guid,
+        create_supported=create_supported,
+        element_probes=element_probes,
+        enum_output_path=enum_output_path,
+        conclusion=conclusion,
+        warnings=warnings,
+        blockers=blockers,
+    )
+
+    payload = {
+        "report": report.to_dict(),
+        "createstore": {
+            "command": list(createstore.command),
+            "returncode": createstore.returncode,
+            "stdout": createstore.stdout,
+            "stderr": createstore.stderr,
+        },
+        "create_bootapp": {
+            "command": list(create_result.command),
+            "returncode": create_result.returncode,
+            "stdout": create_result.stdout,
+            "stderr": create_result.stderr,
+        },
+        "enum": {
+            "command": list(enum_result.command),
+            "returncode": enum_result.returncode,
+            "stdout_path": str(enum_output_path),
+            "stderr_path": str(enum_stderr_path),
+        },
+        "safety": {
+            "uses_offline_store_only": True,
+            "system_store_mutation_attempted": False,
+            "notes": [
+                "All create/set commands include /store <offline-store-path>.",
+                "No command targets {bootmgr}, {fwbootmgr}, system displayorder, or default.",
+            ],
+        },
+    }
+    report_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    return BcdBootappVhdDeviceProbeOutcome(
+        report=report,
+        report_path=report_path,
+        enum_stderr_path=enum_stderr_path,
+    )
+
+
 def analyze_bcd_bootapp_probe_report(*, probe_report_path: Path) -> dict[str, object]:
     """Analyze offline BOOTAPP element probe report and suggest next strategy."""
     payload = json.loads(probe_report_path.read_text(encoding="utf-8"))
@@ -396,6 +579,56 @@ def analyze_bcd_bootapp_probe_report(*, probe_report_path: Path) -> dict[str, ob
     }
 
 
+def analyze_bcd_bootapp_vhd_device_probe_report(*, probe_report_path: Path) -> dict[str, object]:
+    """Analyze BOOTAPP+VHD offline probe and suggest next strategy."""
+    payload = json.loads(probe_report_path.read_text(encoding="utf-8"))
+    report_raw = payload.get("report", {})
+    if not isinstance(report_raw, dict):
+        raise ValueError("Invalid probe report format: missing report object.")
+
+    create_supported = bool(report_raw.get("create_supported", False))
+    element_probes = report_raw.get("element_probes", [])
+    vhd_path_raw = str(report_raw.get("vhd_path", "")).strip()
+    expected_vhd = _format_vhd_device_reference(Path(vhd_path_raw)) if vhd_path_raw else ""
+
+    vhd_device_set_supported = _element_supported(
+        element_probes=element_probes,
+        element="device",
+        value=expected_vhd,
+    )
+    path_set_supported = _element_supported(
+        element_probes=element_probes,
+        element="path",
+        value=_BOOTAPP_VHD_PATH_VALUE,
+    )
+
+    warnings = [str(item) for item in report_raw.get("warnings", [])]
+    blockers = [str(item) for item in report_raw.get("blockers", [])]
+
+    recommended_next_strategy = "blocked"
+    confidence: Literal["low", "medium", "high"] = "low"
+    if create_supported and vhd_device_set_supported and path_set_supported:
+        recommended_next_strategy = "bootapp-vhd-system-dry-run"
+        confidence = "medium"
+        warnings.append(
+            "Recommended strategy is dry-run only; offline acceptance does not prove bootability."
+        )
+    elif create_supported:
+        blockers.append(
+            "bootapp exists but required VHD device/path elements were not fully accepted."
+        )
+
+    return {
+        "bootapp_create_supported": create_supported,
+        "vhd_device_set_supported": vhd_device_set_supported,
+        "path_set_supported": path_set_supported,
+        "recommended_next_strategy": recommended_next_strategy,
+        "confidence": confidence,
+        "warnings": warnings,
+        "blockers": blockers,
+    }
+
+
 def _extract_guid(output: str) -> str | None:
     match = _GUID_RE.search(output)
     if not match:
@@ -443,6 +676,31 @@ def _bootapp_element_conclusion(
     return "unknown"
 
 
+def _bootapp_vhd_device_conclusion(
+    *,
+    create_supported: bool,
+    element_probes: list[BcdElementSetProbe],
+    vhd_device_value: str,
+    blockers: list[str],
+) -> Literal["bootapp_vhd_device_supported", "bootapp_create_only", "blocked", "unknown"]:
+    if not create_supported:
+        return "blocked" if blockers else "unknown"
+
+    device_ok = any(
+        item.element == "device" and item.value.lower() == vhd_device_value.lower() and item.supported
+        for item in element_probes
+    )
+    path_ok = any(
+        item.element == "path" and item.value == _BOOTAPP_VHD_PATH_VALUE and item.supported
+        for item in element_probes
+    )
+    if device_ok and path_ok:
+        return "bootapp_vhd_device_supported"
+    if element_probes:
+        return "bootapp_create_only"
+    return "unknown"
+
+
 def _element_supported(
     *,
     element_probes: object,
@@ -460,3 +718,12 @@ def _element_supported(
             continue
         return bool(item.get("supported", False))
     return False
+
+
+def _format_vhd_device_reference(vhd_path: Path) -> str:
+    raw = str(vhd_path).replace("/", "\\")
+    drive_match = re.match(r"^([a-zA-Z]):\\", raw)
+    if drive_match:
+        drive = drive_match.group(1).upper()
+        return f"vhd=[{drive}:]{raw[2:]}"
+    return f"vhd=[locate]{raw}"

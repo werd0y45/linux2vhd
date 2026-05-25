@@ -366,6 +366,39 @@ class BcdBootappElementProbeReport:
 
 
 @dataclass(slots=True)
+class BcdBootappVhdDeviceProbeReport:
+    """Offline BOOTAPP + VHD device capability probe report."""
+
+    store_path: Path
+    vhd_path: Path
+    bootapp_guid: str | None
+    create_supported: bool
+    element_probes: list[BcdElementSetProbe]
+    enum_output_path: Path
+    conclusion: Literal[
+        "bootapp_vhd_device_supported",
+        "bootapp_create_only",
+        "blocked",
+        "unknown",
+    ]
+    warnings: list[str]
+    blockers: list[str]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "store_path": str(self.store_path),
+            "vhd_path": str(self.vhd_path),
+            "bootapp_guid": self.bootapp_guid,
+            "create_supported": self.create_supported,
+            "element_probes": [item.to_dict() for item in self.element_probes],
+            "enum_output_path": str(self.enum_output_path),
+            "conclusion": self.conclusion,
+            "warnings": self.warnings,
+            "blockers": self.blockers,
+        }
+
+
+@dataclass(slots=True)
 class DoctorReport:
     """Structured diagnostics used in validation reports."""
 

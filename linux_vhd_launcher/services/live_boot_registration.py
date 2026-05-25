@@ -365,6 +365,106 @@ class FirmwareEfiBootappSystemDryRunStrategy:
 
 
 @dataclass(slots=True)
+class BootappVhdSystemDryRunStrategy:
+    """Dry-run strategy gated by offline BOOTAPP + VHD device probe."""
+
+    name: str = "bootapp-vhd-system-dry-run"
+
+    def register(self, request: LiveRegistrationRequest) -> LiveRegistrationOutcome:
+        probe_report_path = request.report_dir / "bcd_bootapp_vhd_device_probe.json"
+        if not probe_report_path.exists():
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "Missing BOOTAPP VHD-device probe report. "
+                    "Run demo bcd probe-bootapp-vhd-device first."
+                ],
+                warnings=["No BCD mutation executed."],
+            )
+
+        payload = json.loads(probe_report_path.read_text(encoding="utf-8"))
+        report_raw = payload.get("report", {})
+        if not isinstance(report_raw, dict):
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=["Invalid BOOTAPP VHD-device probe report format."],
+                warnings=["No BCD mutation executed."],
+            )
+
+        create_supported = bool(report_raw.get("create_supported", False))
+        element_probes = report_raw.get("element_probes", [])
+        expected_vhd = _format_vhd_device(request.layout.vhd_path)
+        device_supported = _probe_element_supported(
+            element_probes=element_probes,
+            element="device",
+            value=expected_vhd,
+        )
+        path_supported = _probe_element_supported(
+            element_probes=element_probes,
+            element="path",
+            value="\\EFI\\BOOT\\BOOTX64.EFI",
+        )
+
+        if not (create_supported and device_supported and path_supported):
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "bootapp exists but required VHD device/path elements were not accepted in offline probe."
+                ],
+                warnings=["No BCD mutation executed."],
+            )
+
+        backup_path = request.report_dir / "bcd_backup_live_registration.bcd"
+        planned = [
+            ["bcdedit", "/export", str(backup_path)],
+            [
+                "bcdedit",
+                "/create",
+                "/d",
+                "LinuxVHDLauncher Ubuntu Live BOOTAPP VHD EXPERIMENT",
+                "/application",
+                "bootapp",
+            ],
+            ["bcdedit", "/set", "{GUID}", "device", expected_vhd],
+            ["bcdedit", "/set", "{GUID}", "path", "\\EFI\\BOOT\\BOOTX64.EFI"],
+            ["bcdedit", "/displayorder", "{GUID}", "/addlast"],
+        ]
+        rollback_actions = [
+            "bcdedit /delete {GUID} /f",
+        ]
+
+        if not request.dry_run:
+            return LiveRegistrationOutcome(
+                strategy=self.name,
+                status="registration_blocked",
+                blockers=[
+                    "bootapp-vhd-system-dry-run real mode remains blocked. "
+                    "Next real experiment requires explicit user approval."
+                ],
+                warnings=["No BCD mutation executed."],
+                planned_commands=planned,
+                rollback_actions=rollback_actions,
+            )
+
+        return LiveRegistrationOutcome(
+            strategy=self.name,
+            status="planned",
+            warnings=[
+                "Offline probe accepted BOOTAPP `device vhd=[...]` and `path` values.",
+                "Dry-run only. Offline acceptance does not prove bootability.",
+            ],
+            blockers=[
+                "Direct BOOTAPP->VHD runtime behavior remains unverified until reboot evidence.",
+            ],
+            planned_commands=planned,
+            rollback_actions=rollback_actions,
+        )
+
+
+@dataclass(slots=True)
 class BcdBootMgrStrategy:
     """Experimental BCDEdit-based registration strategy."""
 
@@ -555,6 +655,8 @@ def choose_registration_strategy(
         return FirmwareEfiStagedDryRunStrategy()
     if value == "firmware-efi-bootapp-system-dry-run":
         return FirmwareEfiBootappSystemDryRunStrategy()
+    if value == "bootapp-vhd-system-dry-run":
+        return BootappVhdSystemDryRunStrategy()
     if value == "firmware-efi-bootapp-probe":
         return FirmwareEfiBootappSystemDryRunStrategy(
             name="firmware-efi-bootapp-probe"

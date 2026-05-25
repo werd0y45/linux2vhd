@@ -861,6 +861,85 @@ def test_firmware_efi_bootapp_system_dry_run_strategy_available(tmp_path: Path) 
     assert ["bcdedit", "/set", "{GUID}", "device", "partition=S:"] in out.planned_commands
 
 
+def test_bootapp_vhd_system_dry_run_strategy_requires_probe_report(tmp_path: Path) -> None:
+    strategy = choose_registration_strategy("bootapp-vhd-system-dry-run")
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=tmp_path / "x.vhdx",
+            size_gb=12,
+        ),
+        report_dir=tmp_path / "reports",
+        lab_dir=tmp_path,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+    )
+    req.report_dir.mkdir(parents=True, exist_ok=True)
+    out = strategy.register(req)
+    assert out.status == "registration_blocked"
+    assert "probe-bootapp-vhd-device" in (out.blockers[0] if out.blockers else "")
+
+
+def test_bootapp_vhd_system_dry_run_plan_and_blocked_real(tmp_path: Path) -> None:
+    strategy = choose_registration_strategy("bootapp-vhd-system-dry-run")
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    vhd_path = Path("C:/LVHLab/ubuntu-live.vhdx")
+    (report_dir / "bcd_bootapp_vhd_device_probe.json").write_text(
+        json.dumps(
+            {
+                "report": {
+                    "vhd_path": str(vhd_path),
+                    "create_supported": True,
+                    "element_probes": [
+                        {
+                            "element": "device",
+                            "value": "vhd=[C:]\\LVHLab\\ubuntu-live.vhdx",
+                            "supported": True,
+                        },
+                        {"element": "path", "value": "\\EFI\\BOOT\\BOOTX64.EFI", "supported": True},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    req = LiveRegistrationRequest(
+        layout=build_live_vhd_layout(
+            iso_info=_make_iso_info(tmp_path / "ubuntu.iso"),
+            vhd_path=vhd_path,
+            size_gb=12,
+        ),
+        report_dir=report_dir,
+        lab_dir=tmp_path,
+        dry_run=True,
+        execute_real_windows_ops=False,
+        confirmation_token=False,
+        confirm_vm_snapshot=False,
+    )
+    out = strategy.register(req)
+    assert out.status == "planned"
+    assert ["bcdedit", "/set", "{GUID}", "device", "vhd=[C:]\\LVHLab\\ubuntu-live.vhdx"] in out.planned_commands
+    assert ["bcdedit", "/set", "{GUID}", "path", "\\EFI\\BOOT\\BOOTX64.EFI"] in out.planned_commands
+    assert all("/copy {current}" not in " ".join(command) for command in out.planned_commands)
+    assert all("{bootmgr}" not in " ".join(command) for command in out.planned_commands)
+
+    req_real = LiveRegistrationRequest(
+        layout=req.layout,
+        report_dir=req.report_dir,
+        lab_dir=req.lab_dir,
+        dry_run=False,
+        execute_real_windows_ops=True,
+        confirmation_token=True,
+        confirm_vm_snapshot=True,
+    )
+    out_real = strategy.register(req_real)
+    assert out_real.status == "registration_blocked"
+    assert any("real mode remains blocked" in blocker for blocker in out_real.blockers)
+
+
 def test_docs_bcd_registration_mentions_known_failed_analysis() -> None:
     content = Path("docs/BCD_LIVE_REGISTRATION.md").read_text(encoding="utf-8")
     assert "known-failed" in content.lower() or "known failed" in content.lower()

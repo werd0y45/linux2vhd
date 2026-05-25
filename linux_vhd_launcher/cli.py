@@ -50,8 +50,10 @@ from linux_vhd_launcher.models import (
 )
 from linux_vhd_launcher.services.bcd_probe import (
     analyze_bcd_bootapp_probe_report,
+    analyze_bcd_bootapp_vhd_device_probe_report,
     probe_bcd_application_types,
     probe_bcd_bootapp_elements,
+    probe_bcd_bootapp_vhd_device,
 )
 from linux_vhd_launcher.services.boot_manager import BootManager, RegistryUpdater
 from linux_vhd_launcher.services.installer_service import (
@@ -343,12 +345,26 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_bcd_bootapp.add_argument("--lab-dir", type=Path, required=True)
     demo_bcd_bootapp.add_argument("--report-dir", type=Path, required=True)
     demo_bcd_bootapp.add_argument("--json", action="store_true")
+    demo_bcd_bootapp_vhd = demo_bcd_sub.add_parser(
+        "probe-bootapp-vhd-device",
+        help="Probe BOOTAPP with VHD device/path in offline BCD store only",
+    )
+    demo_bcd_bootapp_vhd.add_argument("--vhd", type=Path, required=True)
+    demo_bcd_bootapp_vhd.add_argument("--lab-dir", type=Path, required=True)
+    demo_bcd_bootapp_vhd.add_argument("--report-dir", type=Path, required=True)
+    demo_bcd_bootapp_vhd.add_argument("--json", action="store_true")
     demo_bcd_analyze = demo_bcd_sub.add_parser(
         "analyze-bootapp-probe",
         help="Analyze offline BOOTAPP element probe report and recommend next strategy",
     )
     demo_bcd_analyze.add_argument("--probe-report", type=Path, required=True)
     demo_bcd_analyze.add_argument("--json", action="store_true")
+    demo_bcd_analyze_vhd = demo_bcd_sub.add_parser(
+        "analyze-bootapp-vhd-device-probe",
+        help="Analyze BOOTAPP VHD-device probe report and recommend next strategy",
+    )
+    demo_bcd_analyze_vhd.add_argument("--probe-report", type=Path, required=True)
+    demo_bcd_analyze_vhd.add_argument("--json", action="store_true")
 
     demo_live = demo_sub.add_parser("live", help="Live VHD payload demo operations")
     demo_live_sub = demo_live.add_subparsers(dest="demo_live_command", required=True)
@@ -388,6 +404,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "firmware-efi-staged",
             "firmware-efi-bootapp-probe",
             "firmware-efi-bootapp-system-dry-run",
+            "bootapp-vhd-system-dry-run",
             "blocked",
         ],
         default="auto",
@@ -420,6 +437,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "firmware-efi-staged",
             "firmware-efi-bootapp-probe",
             "firmware-efi-bootapp-system-dry-run",
+            "bootapp-vhd-system-dry-run",
             "blocked",
         ],
         default="auto",
@@ -1563,6 +1581,30 @@ def _run_demo_command(args: argparse.Namespace) -> int:
 
         if args.demo_bcd_command == "analyze-bootapp-probe":
             payload = analyze_bcd_bootapp_probe_report(
+                probe_report_path=Path(args.probe_report)
+            )
+            print(json.dumps(payload, indent=2))
+            return 0
+
+        if args.demo_bcd_command == "probe-bootapp-vhd-device":
+            outcome = probe_bcd_bootapp_vhd_device(
+                vhd_path=Path(args.vhd),
+                lab_dir=Path(args.lab_dir),
+                report_dir=Path(args.report_dir),
+            )
+            payload = outcome.to_dict()
+            if as_json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print("status: planned")
+                print(f"store_path: {outcome.report.store_path}")
+                print(f"vhd_path: {outcome.report.vhd_path}")
+                print(f"create_supported: {outcome.report.create_supported}")
+                print(f"conclusion: {outcome.report.conclusion}")
+            return 0
+
+        if args.demo_bcd_command == "analyze-bootapp-vhd-device-probe":
+            payload = analyze_bcd_bootapp_vhd_device_probe_report(
                 probe_report_path=Path(args.probe_report)
             )
             print(json.dumps(payload, indent=2))

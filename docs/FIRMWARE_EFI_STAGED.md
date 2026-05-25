@@ -28,6 +28,9 @@ Interpretation:
 - Firmware-visible ESP path on Windows: potentially usable for UEFI boot menu experiments.
 - EFI binary inside VHDX via BCD/firmware: **не подтверждено**.
 - Current implementation keeps real mode blocked until documented entry creation path is validated.
+- Important project caveat:
+  - ESP-staged BOOTAPP path may not expose ISO that is stored inside VHDX payload (`...vhdx::/live/*.iso`).
+  - Therefore ESP-only staging is not the closest representation of final project target.
 
 ## Documented command building blocks used in planning
 
@@ -49,6 +52,10 @@ Interpretation:
   then project enables dry-run strategy `firmware-efi-bootapp-system-dry-run`.
 - If BOOTAPP exists but required elements are not accepted, `firmware-efi-staged` remains blocked and decision text is:
   - `bootapp exists but required elements were not accepted in offline probe.`
+- For project-aligned follow-up, run `demo bcd probe-bootapp-vhd-device`.
+- If VHD device + `\EFI\BOOT\BOOTX64.EFI` are accepted offline, use dry-run strategy:
+  - `bootapp-vhd-system-dry-run`
+  - still blocked for real mutation in current release.
 
 ## What remains unverified until reboot test
 

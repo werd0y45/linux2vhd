@@ -11,6 +11,7 @@ Boot registration is separated from payload build.
 - `bootmgr-experimental-vhd`: explicit unsafe-gated BCD VHD experiment for disposable VM snapshot.
 - `firmware-efi-staged`: ESP staging-oriented strategy; currently plan-first and real mode blocked pending documented firmware-entry validation.
 - `firmware-efi-bootapp-system-dry-run`: dry-run strategy that activates only after offline probe confirms BOOTAPP `create` + `device` + `path` acceptance.
+- `bootapp-vhd-system-dry-run`: dry-run strategy that activates only after offline probe confirms BOOTAPP `device vhd=[...]` + `path \EFI\BOOT\BOOTX64.EFI` acceptance.
 
 ## Known Failure Evidence (Windows 10 VM)
 
@@ -74,6 +75,9 @@ As a result, strategy is marked known-failed with id:
   - unmount ESP (`mountvol S: /d`).
 - Does not mutate `{bootmgr}` path or default entry.
 - Does not claim bootability.
+- Caveat:
+  - ESP-staged loader may not see ISO that is stored inside VHDX payload.
+  - This is why BOOTAPP VHD-device probe is tracked as the next closer experiment.
 
 ## Offline BOOTAPP probes
 
@@ -83,6 +87,10 @@ As a result, strategy is marked known-failed with id:
   - `demo bcd probe-bootapp-elements --lab-dir <lab> --report-dir <reports> --json`
 - Analyzer:
   - `demo bcd analyze-bootapp-probe --probe-report <reports>\\bcd_bootapp_elements_probe.json --json`
+- Command:
+  - `demo bcd probe-bootapp-vhd-device --vhd <vhd-path> --lab-dir <lab> --report-dir <reports> --json`
+- Analyzer:
+  - `demo bcd analyze-bootapp-vhd-device-probe --probe-report <reports>\\bcd_bootapp_vhd_device_probe.json --json`
 - Uses offline store only:
   - `bcdedit /createstore <lab>\\bcd_probe\\bcd_probe.bcd`
   - `bcdedit /store <probe-store> /create ... /application osloader|bootsector|bootapp`
@@ -94,6 +102,13 @@ As a result, strategy is marked known-failed with id:
   - `bcdedit /store <probe-store> /enum all /v`
 - Probe result informs whether `firmware-efi-bootapp-system-dry-run` can generate an extended dry-run plan.
 - Even if `device/path` are accepted offline, runtime Linux EFI boot remains **не подтверждено**.
+- Uses separate offline store for BOOTAPP VHD-device probes:
+  - `bcdedit /store <probe-store> /create ... /application bootapp`
+  - `bcdedit /store <probe-store> /set {GUID} device vhd=[C:]\\LVHLab\\ubuntu-live.vhdx`
+  - `bcdedit /store <probe-store> /set {GUID} path \EFI\BOOT\BOOTX64.EFI`
+  - `bcdedit /store <probe-store> /enum all /v`
+- Probe result informs whether `bootapp-vhd-system-dry-run` can generate dry-run system-mutation plan.
+- Offline acceptance still does not prove bootability.
 
 ## Artifacts
 
